@@ -22,6 +22,7 @@ const ui = createUIController({
   settings,
   onSettingsChanged: () => arController?.applySettingsLive(),
   onReset: () => arController?.resetAnchor(),
+  onPlaceHere: () => arController?.placeHere(),
   onToggleTorch: () => torchModule?.toggle(),
   onRetry: () => window.location.reload(),
 });

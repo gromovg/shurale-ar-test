@@ -182,13 +182,13 @@ body {
 /* Bottom action bar */
 .hud-bottom {
   position: fixed;
-  left: 12px;
-  right: 12px;
+  left: 10px;
+  right: 10px;
   bottom: max(14px, env(safe-area-inset-bottom));
   z-index: 25;
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 10px;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 8px;
 }
 
 .action-btn {
@@ -197,17 +197,23 @@ body {
   align-items: center;
   justify-content: center;
   gap: 3px;
-  padding: 10px 8px;
-  border-radius: 16px;
+  padding: 10px 4px;
+  border-radius: 15px;
   border: 1px solid var(--border-glass);
   background: var(--bg-glass);
   color: var(--text-main);
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 600;
+  white-space: nowrap;
   backdrop-filter: blur(12px);
   -webkit-backdrop-filter: blur(12px);
   cursor: pointer;
   transition: transform 0.1s ease, background 0.15s ease, border-color 0.15s ease;
+}
+
+.action-btn-accent {
+  background: rgba(56, 189, 248, 0.22);
+  border-color: rgba(56, 189, 248, 0.65);
 }
 
 .action-btn:active {

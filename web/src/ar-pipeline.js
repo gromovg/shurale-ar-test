@@ -154,11 +154,13 @@ export function createShuralePipeline({
   let mixer = null;
   let dirLight = null;
   let plaqueOutline = null;
+  let floorReticle = null;
 
   let isModelLoaded = false;
   let modelLoadMs = 0;
   let isAnchored = false;
   let isLocked = false;
+  let isManualPlaced = false;
   let isTargetVisible = false;
   let lockCount = 0;
   let trackingStatus = 'INIT';
@@ -182,6 +184,11 @@ export function createShuralePipeline({
   const tmpCheckPoint = new THREE.Vector3();
   const tmpCamSpace = new THREE.Vector3();
   const tmpCamInv = new THREE.Matrix4();
+  const raycaster = new THREE.Raycaster();
+  const CENTER_NDC = new THREE.Vector2(0, 0);
+  const tmpFloorPlane = new THREE.Plane();
+  const tmpHit = new THREE.Vector3();
+  const tmpCamDir = new THREE.Vector3();
 
   function computeUnitsPerMeter(detailScale, settings) {
     if (!settings.useTargetScaleCalibration) {
@@ -332,6 +339,20 @@ export function createShuralePipeline({
     plaqueOutline = new THREE.LineSegments(edges, lineMat);
     plaqueOutline.visible = false;
     scene.add(plaqueOutline);
+
+    // Subtle floor aiming ring shown before Shurale is placed so "Сюда" aiming is effortless
+    const ringGeo = new THREE.RingGeometry(0.18, 0.24, 36);
+    ringGeo.rotateX(-Math.PI / 2);
+    const ringMat = new THREE.MeshBasicMaterial({
+      color: 0x38bdf8,
+      transparent: true,
+      opacity: 0.75,
+      side: THREE.DoubleSide,
+      depthWrite: false,
+    });
+    floorReticle = new THREE.Mesh(ringGeo, ringMat);
+    floorReticle.visible = false;
+    scene.add(floorReticle);
 
     // Load optimized Shurale GLB (1.60 m real-world height, feet at Y = 0)
     const t0 = performance.now();
@@ -525,6 +546,45 @@ export function createShuralePipeline({
     }
   }
 
+  function getCurrentFloorAndScale() {
+    const settings = getSettings();
+    const activePose = lockedPlaquePose || lastPlaquePose;
+    if (activePose) {
+      const unitsPerMeter = computeUnitsPerMeter(activePose.scale, settings);
+      const floorY = activePose.position.y - settings.mountHeightM * unitsPerMeter;
+      return { floorY, unitsPerMeter, calibratedByPlaque: true };
+    }
+    // Pure SLAM fallback (before scanning plaque): floor is Y = 0, camera started at Y = 1.4
+    return { floorY: 0, unitsPerMeter: 1.0, calibratedByPlaque: false };
+  }
+
+  function raycastFloorPoint() {
+    if (!camera) return null;
+    camera.updateMatrixWorld();
+    const { floorY, unitsPerMeter, calibratedByPlaque } = getCurrentFloorAndScale();
+    tmpFloorPlane.set(WORLD_UP, -floorY);
+    raycaster.setFromCamera(CENTER_NDC, camera);
+    const hit = raycaster.ray.intersectPlane(tmpFloorPlane, tmpHit);
+    const minDist = 0.45 * unitsPerMeter;
+    const maxDist = 10.0 * unitsPerMeter;
+
+    if (hit) {
+      const dist = camera.position.distanceTo(tmpHit);
+      if (dist >= minDist && dist <= maxDist) {
+        return { point: tmpHit.clone(), floorY, unitsPerMeter, calibratedByPlaque, exactRay: true };
+      }
+    }
+
+    // Fallback when phone is held level/upward: place 1.8 m ahead of camera on the floor
+    camera.getWorldDirection(tmpCamDir);
+    tmpCamDir.y = 0;
+    if (tmpCamDir.lengthSq() < 1e-4) tmpCamDir.set(0, 0, -1);
+    else tmpCamDir.normalize();
+    const fallback = camera.position.clone().addScaledVector(tmpCamDir, 1.8 * unitsPerMeter);
+    fallback.y = floorY;
+    return { point: fallback, floorY, unitsPerMeter, calibratedByPlaque, exactRay: false };
+  }
+
   function handleTrackingStatus({ detail }) {
     if (!detail) return;
     trackingStatus = detail.reason && detail.reason !== 'UNDEFINED'
@@ -556,6 +616,23 @@ export function createShuralePipeline({
 
       if (mixer && shuraleAnchor && shuraleAnchor.visible) {
         mixer.update(dt);
+      }
+
+      // Show floor aiming ring when camera points at the floor and Shurale is not yet placed
+      if (floorReticle && camera) {
+        if (!isAnchored) {
+          const aim = raycastFloorPoint();
+          if (aim && aim.exactRay) {
+            floorReticle.position.copy(aim.point);
+            floorReticle.position.y += 0.004 * aim.unitsPerMeter;
+            floorReticle.scale.setScalar(aim.unitsPerMeter);
+            floorReticle.visible = true;
+          } else {
+            floorReticle.visible = false;
+          }
+        } else {
+          floorReticle.visible = false;
+        }
       }
 
       // Track FPS & push compact telemetry ~4 times/sec
@@ -630,10 +707,54 @@ export function createShuralePipeline({
 
   return {
     pipelineModule,
+    placeHere() {
+      if (!shuraleAnchor || !camera) {
+        return { ok: false, reason: 'Камера ещё не готова' };
+      }
+      const aim = raycastFloorPoint();
+      if (!aim) {
+        return { ok: false, reason: 'Не удалось определить точку на полу' };
+      }
+      const settings = getSettings();
+      const modelScale = settings.modelScale ?? 1.0;
+
+      // Turn Shurale to face the user horizontally
+      const yaw = Math.atan2(
+        camera.position.x - aim.point.x,
+        camera.position.z - aim.point.z,
+      ) + THREE.MathUtils.degToRad(settings.yawOffsetDeg);
+
+      shuraleAnchor.position.copy(aim.point);
+      shuraleAnchor.quaternion.setFromAxisAngle(WORLD_UP, yaw);
+      shuraleAnchor.scale.setScalar(aim.unitsPerMeter * modelScale);
+
+      isAnchored = true;
+      isLocked = true;
+      isManualPlaced = true;
+      if (floorReticle) floorReticle.visible = false;
+      if (isModelLoaded) {
+        shuraleAnchor.visible = true;
+      }
+
+      onStatusChange?.(
+        'slam',
+        aim.calibratedByPlaque
+          ? 'Поставлен на пол (калибр. по табличке) — 360°'
+          : 'Поставлен на пол (SLAM) — обходите на 360°',
+      );
+      return { ok: true, calibratedByPlaque: aim.calibratedByPlaque };
+    },
     applySettingsLive() {
       const settings = getSettings();
       if (plaqueOutline) {
         plaqueOutline.visible = Boolean(isTargetVisible && settings.showPlaqueDebug);
+      }
+      if (isManualPlaced && isAnchored && shuraleAnchor) {
+        const { floorY, unitsPerMeter } = getCurrentFloorAndScale();
+        const modelScale = settings.modelScale ?? 1.0;
+        shuraleAnchor.position.y = floorY;
+        shuraleAnchor.scale.setScalar(unitsPerMeter * modelScale);
+        return;
       }
       const activePose = lockedPlaquePose || lastPlaquePose;
       if (isAnchored && activePose) {
@@ -643,19 +764,21 @@ export function createShuralePipeline({
     resetAnchor() {
       isAnchored = false;
       isLocked = false;
+      isManualPlaced = false;
       isTargetVisible = false;
       poseSamples = [];
       lockedPlaquePose = null;
       lastPlaquePose = null;
       if (shuraleAnchor) shuraleAnchor.visible = false;
       if (plaqueOutline) plaqueOutline.visible = false;
+      if (floorReticle) floorReticle.visible = false;
       try {
         window.XR8?.XrController?.recenter();
       } catch (err) {
         console.warn('recenter warning:', err);
       }
       onDirectionHint?.(null);
-      onStatusChange?.('searching', 'Сброшено — наведите на табличку А4');
+      onStatusChange?.('searching', 'Наведите на табличку или нажмите «Сюда»');
     },
   };
 }

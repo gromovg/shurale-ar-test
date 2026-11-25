@@ -9,6 +9,7 @@ export function createUIController({
   settings,
   onSettingsChanged,
   onReset,
+  onPlaceHere,
   onToggleTorch,
   onRetry,
 }) {
@@ -23,6 +24,7 @@ export function createUIController({
     telemetryBox: document.getElementById('telemetry-box'),
     telemetryLines: document.getElementById('telemetry-lines'),
     btnReset: document.getElementById('btn-reset'),
+    btnPlaceHere: document.getElementById('btn-place-here'),
     btnTorch: document.getElementById('btn-torch'),
     torchLabel: document.getElementById('torch-label'),
     btnSettings: document.getElementById('btn-settings'),
@@ -150,7 +152,21 @@ export function createUIController({
   // Action bar buttons
   el.btnReset.addEventListener('click', () => {
     onReset?.();
-    showToast('Позиция сброшена — наведите на табличку');
+    showToast('Позиция сброшена — наведи на табличку или нажми «Сюда»');
+  });
+
+  el.btnPlaceHere.addEventListener('click', () => {
+    const res = onPlaceHere?.();
+    if (res && !res.ok && res.reason) {
+      showToast(res.reason);
+    } else if (res && res.ok) {
+      showToast(
+        res.calibratedByPlaque
+          ? 'Шурале поставлен сюда (точный масштаб по табличке)'
+          : 'Шурале поставлен сюда по SLAM',
+        2000,
+      );
+    }
   });
 
   el.btnTorch.addEventListener('click', async () => {
@@ -224,7 +240,7 @@ export function createUIController({
     },
     setTorchState({ isOn }) {
       el.btnTorch.setAttribute('aria-pressed', String(Boolean(isOn)));
-      el.torchLabel.textContent = isOn ? 'Фонарик ВКЛ' : 'Фонарик';
+      el.torchLabel.textContent = isOn ? 'Свет ВКЛ' : 'Свет';
     },
     updateTelemetry(info) {
       if (el.telemetryBox.classList.contains('hidden')) return;
