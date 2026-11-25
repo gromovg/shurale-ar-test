@@ -17,6 +17,7 @@ export function createUIController({
     statusPill: document.getElementById('status-pill'),
     statusText: document.getElementById('status-text'),
     scanHint: document.getElementById('scan-hint'),
+    scanLabel: document.getElementById('scan-label'),
     directionHint: document.getElementById('direction-hint'),
     btnPresetFull: document.getElementById('btn-preset-full'),
     btnPresetDesk: document.getElementById('btn-preset-desk'),
@@ -161,10 +162,10 @@ export function createUIController({
       showToast(res.reason);
     } else if (res && res.ok) {
       showToast(
-        res.calibratedByPlaque
-          ? 'Шурале поставлен сюда (точный масштаб по табличке)'
-          : 'Шурале поставлен сюда по SLAM',
-        2000,
+        res.isSlamReady
+          ? 'Шурале поставлен сюда (статичный рост 1,6 м)'
+          : 'SLAM ещё калибруется — поведите телефоном 1–2 сек и нажмите «Сюда» снова',
+        2600,
       );
     }
   });
@@ -226,9 +227,17 @@ export function createUIController({
 
   return {
     setStatus(mode, text) {
-      el.statusPill.className = `status-pill status-${mode}`;
+      const cssMode = mode === 'calibrating' ? 'loading' : mode;
+      el.statusPill.className = `status-pill status-${cssMode}`;
       el.statusText.textContent = text;
-      el.scanHint.classList.toggle('hidden', mode !== 'searching');
+      const showHint = mode === 'searching' || mode === 'calibrating';
+      el.scanHint.classList.toggle('hidden', !showHint);
+      if (el.scanLabel) {
+        el.scanLabel.textContent =
+          mode === 'calibrating'
+            ? 'Плавно поведите телефоном влево-вправо (~40 см) для калибровки метров'
+            : 'SLAM готов (1:1 м) — наведите на табличку или на пол → «📍 Сюда»';
+      }
     },
     setDirectionHint(text) {
       if (!text) {
@@ -257,10 +266,12 @@ export function createUIController({
         : info.isTargetVisible
           ? `CALIBRATING (${info.sampleCount}/10)`
           : 'SEARCHING';
+      const camYStr = info.camY != null ? `${info.camY.toFixed(2)} м` : '—';
+      const shScaleStr = info.shuraleScale != null ? `${info.shuraleScale.toFixed(2)}x` : '1.00x';
       el.telemetryLines.textContent = [
         `Режим: ${stateStr} | SLAM: ${info.trackingStatus} | FPS: ${info.fps}`,
-        `Модель GLB: ${modelStr} | До Шурале: ${distStr}`,
-        `Target scale: ${scaleStr} | Рамка: ${settings.targetWidthMm} мм`,
+        `До Шурале: ${distStr} | Масштаб модели: ${shScaleStr} | CamY: ${camYStr}`,
+        `GLB: ${modelStr} | Target scale: ${scaleStr}`,
       ].join('\n');
     },
     showError(title, message) {

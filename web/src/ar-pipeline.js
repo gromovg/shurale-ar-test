@@ -162,8 +162,9 @@ export function createShuralePipeline({
   let isLocked = false;
   let isManualPlaced = false;
   let isTargetVisible = false;
+  let isSlamReady = false;
   let lockCount = 0;
-  let trackingStatus = 'INIT';
+  let trackingStatus = 'INITIALIZING';
 
   const CALIBRATION_FRAMES = 10;
   let poseSamples = [];
@@ -386,13 +387,13 @@ export function createShuralePipeline({
         if (isAnchored) {
           shuraleAnchor.visible = true;
           onStatusChange?.(
-            isTargetVisible ? 'tracking' : 'slam',
-            isTargetVisible
-              ? 'Табличка в кадре — Шурале на земле'
-              : 'SLAM-удержание — обходите на 360°',
+            'slam',
+            'Зафиксирован (1,6 м) — обходите на 360°',
           );
+        } else if (isSlamReady) {
+          onStatusChange?.('searching', 'SLAM готов (1:1 м) — наведи на табличку или «Сюда»');
         } else {
-          onStatusChange?.('searching', 'Наведите камеру на табличку А4');
+          onStatusChange?.('calibrating', 'Поведите телефоном вбок (~40 см) — калибровка метров');
         }
       },
       (evt) => {
@@ -496,6 +497,13 @@ export function createShuralePipeline({
     lastPlaquePose = pose;
     updatePlaqueOutline(detail);
 
+    // Wait for absolute SLAM to finish metric scale calibration BEFORE locking Shurale,
+    // so the world coordinate system won't rescale/jump later!
+    if (!isSlamReady && !isAnchored) {
+      onStatusChange?.('calibrating', 'Табличка видна — поведите телефоном вбок (~40 см)');
+      return;
+    }
+
     if (!isLocked) {
       recordCalibrationSample(pose);
       return;
@@ -515,6 +523,10 @@ export function createShuralePipeline({
     const pose = extractPose(detail);
     lastPlaquePose = pose;
     updatePlaqueOutline(detail);
+
+    if (!isSlamReady && !isAnchored) {
+      return;
+    }
 
     if (!isLocked) {
       recordCalibrationSample(pose);
@@ -536,13 +548,15 @@ export function createShuralePipeline({
     }
     // CRITICAL: Do NOT hide shuraleAnchor! It remains anchored in SLAM world coordinates.
     if (isLocked) {
-      onStatusChange?.('slam', 'Зафиксирован в комнате — обходите на 360°');
+      onStatusChange?.('slam', 'Зафиксирован (1,6 м) — обходите на 360°');
     } else if (isAnchored) {
       // User moved camera away before 10 frames finished -> lock immediately on what we have!
       isLocked = true;
-      onStatusChange?.('slam', 'Зафиксирован в комнате — обходите на 360°');
+      onStatusChange?.('slam', 'Зафиксирован (1,6 м) — обходите на 360°');
+    } else if (isSlamReady) {
+      onStatusChange?.('searching', 'SLAM готов (1:1 м) — наведи на табличку или «Сюда»');
     } else {
-      onStatusChange?.('searching', 'Наведите камеру на табличку А4');
+      onStatusChange?.('calibrating', 'Поведите телефоном вбок (~40 см) — калибровка метров');
     }
   }
 
@@ -590,6 +604,13 @@ export function createShuralePipeline({
     trackingStatus = detail.reason && detail.reason !== 'UNDEFINED'
       ? `${detail.status}/${detail.reason}`
       : (detail.status || 'UNKNOWN');
+
+    if (detail.status === 'NORMAL' && !isSlamReady) {
+      isSlamReady = true;
+      if (!isAnchored && isModelLoaded) {
+        onStatusChange?.('searching', 'SLAM готов (1:1 м) — наведи на табличку или «Сюда»');
+      }
+    }
   }
 
   const pipelineModule = {
@@ -686,12 +707,15 @@ export function createShuralePipeline({
           modelLoadMs,
           isAnchored,
           isLocked,
+          isSlamReady,
           sampleCount: poseSamples.length,
           trackingStatus,
           isTargetVisible,
           lockCount,
           targetScale: activePose ? activePose.scale : null,
           unitsPerMeter: uPerM,
+          shuraleScale: shuraleAnchor ? shuraleAnchor.scale.x : 1.0,
+          camY: camera ? camera.position.y : null,
           camDistM: camDist,
           anchorPos: isAnchored && shuraleAnchor ? shuraleAnchor.position : null,
         });
@@ -738,11 +762,15 @@ export function createShuralePipeline({
 
       onStatusChange?.(
         'slam',
-        aim.calibratedByPlaque
-          ? 'Поставлен на пол (калибр. по табличке) — 360°'
-          : 'Поставлен на пол (SLAM) — обходите на 360°',
+        isSlamReady
+          ? 'Зафиксирован (1:1 м) — обходите на 360°'
+          : 'Поставлен (SLAM ещё калибруется)',
       );
-      return { ok: true, calibratedByPlaque: aim.calibratedByPlaque };
+      return {
+        ok: true,
+        calibratedByPlaque: aim.calibratedByPlaque,
+        isSlamReady,
+      };
     },
     applySettingsLive() {
       const settings = getSettings();
@@ -766,6 +794,8 @@ export function createShuralePipeline({
       isLocked = false;
       isManualPlaced = false;
       isTargetVisible = false;
+      isSlamReady = false;
+      trackingStatus = 'INITIALIZING';
       poseSamples = [];
       lockedPlaquePose = null;
       lastPlaquePose = null;
@@ -778,7 +808,7 @@ export function createShuralePipeline({
         console.warn('recenter warning:', err);
       }
       onDirectionHint?.(null);
-      onStatusChange?.('searching', 'Наведите на табличку или нажмите «Сюда»');
+      onStatusChange?.('calibrating', 'Сброшено — поведите телефоном вбок (~40 см)');
     },
   };
 }

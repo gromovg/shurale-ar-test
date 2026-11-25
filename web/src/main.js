@@ -97,13 +97,13 @@ async function startARSession() {
   try {
     const XR8 = cachedXR8;
 
-    // Configure 8th Wall: Image Target + World Tracking (SLAM).
-    // Use scale: 'responsive' so SLAM freezes world scale on frame 1 (no mid-walk scale jumps),
-    // while our physical 195x260 mm A4 plaque calibrates exact real-world meters!
+    // Configure 8th Wall: Image Target + World Tracking (SLAM) in true 1:1 real-world meters.
+    // We wait for reality.trackingstatus === 'NORMAL' before hard-locking so walking 1 m
+    // moves the camera exactly 1 m and Shurale's size stays 100% static!
     XR8.XrController.configure({
       imageTargetData: [cachedTargetData],
       disableWorldTracking: false,
-      scale: 'responsive',
+      scale: 'absolute',
     });
 
     torchModule = createTorchModule({

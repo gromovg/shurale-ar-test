@@ -1,4 +1,4 @@
-const STORAGE_KEY = 'shurale_ar_settings_v2';
+const STORAGE_KEY = 'shurale_ar_settings_v3';
 
 export const DEFAULT_SETTINGS = {
   // Height of the physical plaque/monitor center above the floor (meters)
@@ -14,15 +14,15 @@ export const DEFAULT_SETTINGS = {
   // Extra Y-axis rotation of Shurale relative to facing forward out of plaque (degrees)
   yawOffsetDeg: 0,
 
-  // Character scale multiplier (1.0 = real 1.60 m height; 0.22 = 35 cm desk test)
+  // Character scale multiplier (1.0 = strict static 1.60 m height in absolute SLAM meters)
   modelScale: 1.0,
 
   // Actual tape-measured width of the black outer 3:4 tracking frame (mm)
   // Set to user's measured monitor frame width: 170 mm (17 cm)
   targetWidthMm: 170,
 
-  // Calibrate real-world meter scale directly from physical plaque size (detail.scale / targetHeightM)
-  useTargetScaleCalibration: true,
+  // In scale: 'absolute' mode, SLAM already runs in true 1:1 meters, so keep scale strictly 1.0!
+  useTargetScaleCalibration: false,
 
   // Show green wireframe outline on the plaque while it is in view
   showPlaqueDebug: true,

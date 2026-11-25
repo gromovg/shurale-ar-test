@@ -46,7 +46,7 @@
       <span class="corner bl"></span>
       <span class="corner br"></span>
     </div>
-    <div class="scan-label">Наведите камеру на матовую табличку А4 «Кышкы Әкият»</div>
+    <div id="scan-label" class="scan-label">Поведите телефоном вбок (~40 см) для калибровки метров</div>
   </div>
 
   <!-- Start overlay (ensures valid iOS Safari user gesture for Camera + IMU Motion sensors) -->
@@ -142,8 +142,8 @@
 
     <div class="toggle-grid">
       <label class="toggle-item">
-        <input id="chk-target-scale" type="checkbox" checked />
-        <span>Калибровать масштаб по табличке</span>
+        <input id="chk-target-scale" type="checkbox" />
+        <span>Калибровать масштаб по табличке (обычно выкл в 1:1)</span>
       </label>
       <label class="toggle-item">
         <input id="chk-show-plaque" type="checkbox" checked />
