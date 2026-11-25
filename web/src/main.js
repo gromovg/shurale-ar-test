@@ -61,25 +61,38 @@ async function fetchImageTarget() {
  * so 8th Wall SLAM + absolute scale gets full IMU sensor fusion.
  */
 async function requestIOSMotionPermissions() {
-  try {
-    if (
-      typeof DeviceMotionEvent !== 'undefined' &&
-      typeof DeviceMotionEvent.requestPermission === 'function'
-    ) {
-      await DeviceMotionEvent.requestPermission();
+  const results = [];
+  if (
+    typeof DeviceMotionEvent !== 'undefined' &&
+    typeof DeviceMotionEvent.requestPermission === 'function'
+  ) {
+    try {
+      results.push(`motion:${await DeviceMotionEvent.requestPermission()}`);
+    } catch (err) {
+      results.push(`motion:err(${err?.name || err})`);
     }
-  } catch (err) {
-    console.warn('DeviceMotionEvent permission warning:', err);
   }
-  try {
-    if (
-      typeof DeviceOrientationEvent !== 'undefined' &&
-      typeof DeviceOrientationEvent.requestPermission === 'function'
-    ) {
-      await DeviceOrientationEvent.requestPermission();
+  if (
+    typeof DeviceOrientationEvent !== 'undefined' &&
+    typeof DeviceOrientationEvent.requestPermission === 'function'
+  ) {
+    try {
+      results.push(`orient:${await DeviceOrientationEvent.requestPermission()}`);
+    } catch (err) {
+      results.push(`orient:err(${err?.name || err})`);
     }
-  } catch (err) {
-    console.warn('DeviceOrientationEvent permission warning:', err);
+  }
+  return results;
+}
+
+function formatErrorDetail(err) {
+  if (!err) return 'unknown';
+  if (typeof err === 'string') return err;
+  if (err instanceof Error) return `${err.name}: ${err.message}`;
+  try {
+    return err.message || err.type || JSON.stringify(err);
+  } catch {
+    return String(err);
   }
 }
 
@@ -89,7 +102,17 @@ async function startARSession() {
   btnStartAr.disabled = true;
   btnStartAr.textContent = 'Запуск камеры...';
 
-  await requestIOSMotionPermissions();
+  const motionRes = await requestIOSMotionPermissions();
+  const motionDenied = motionRes.some((r) => r.includes('denied'));
+  if (motionDenied) {
+    startOverlay.classList.add('hidden');
+    ui.setStatus('error', 'Нет доступа к датчикам');
+    ui.showError(
+      'Доступ к датчикам движения отклонён',
+      `Для AR нужен доступ к гироскопу. Полностью закройте Safari (смахните вверх), откройте ссылку заново и нажмите «Разрешить». (${motionRes.join(', ')})`,
+    );
+    return;
+  }
 
   startOverlay.classList.add('hidden');
   ui.setStatus('loading', 'Запуск камеры и SLAM...');
@@ -125,8 +148,8 @@ async function startARSession() {
       name: 'camera-error-handler',
       onException: (err) => {
         console.error('XR8 exception:', err);
-        const msg = err?.message || '';
-        if (msg.includes('No valid session manager')) {
+        const detail = formatErrorDetail(err);
+        if (detail.includes('No valid session manager')) {
           ui.setStatus('error', 'Откройте на смартфоне');
           ui.showError(
             'Откройте ссылку на iPhone или Android',
@@ -137,15 +160,15 @@ async function startARSession() {
         ui.setStatus('error', 'Ошибка AR-движка');
         ui.showError(
           'Ошибка запуска AR',
-          msg || 'Проверьте разрешение на камеру и датчики движения в настройках Safari.',
+          `Проверьте разрешение на камеру и датчики движения в Safari (если отказали ранее — полностью закройте Safari и откройте ссылку снова).\n\nКод: ${detail}`,
         );
       },
-      onCameraStatusChange: ({ status }) => {
+      onCameraStatusChange: ({ status, reason }) => {
         if (status === 'failed') {
           ui.setStatus('error', 'Нет доступа к камере');
           ui.showError(
             'Доступ к камере отклонён',
-            'Разрешите доступ к камере для этого сайта в Safari / Chrome и нажмите «Попробовать снова».',
+            `Разрешите доступ к камере для gromovg.github.io (кнопка слева в адресной строке → Настройки веб-сайта → Камера: Разрешить) и нажмите «Попробовать снова».${reason ? `\n\nКод: ${formatErrorDetail(reason)}` : ''}`,
           );
         }
       },
