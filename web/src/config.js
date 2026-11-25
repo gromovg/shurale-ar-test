@@ -27,6 +27,10 @@ export const DEFAULT_SETTINGS = {
 
   // Show green wireframe outline on the plaque while it is in view
   showPlaqueDebug: true,
+
+  // Keep Shurale hard-locked in SLAM world after initial calibration (prevents angle-jitter jumps).
+  // When true, looking back at the plaque gently pulls Shurale toward the newly measured pose.
+  autoRealignOnPlaque: false,
 };
 
 export const PRESET_FULL_FLOOR = {

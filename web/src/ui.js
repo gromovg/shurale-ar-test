@@ -50,6 +50,7 @@ export function createUIController({
     valTargetWidth: document.getElementById('val-target-width'),
     chkTargetScale: document.getElementById('chk-target-scale'),
     chkShowPlaque: document.getElementById('chk-show-plaque'),
+    chkAutoRealign: document.getElementById('chk-auto-realign'),
   };
 
   let toastTimer = null;
@@ -86,6 +87,7 @@ export function createUIController({
 
     el.chkTargetScale.checked = Boolean(settings.useTargetScaleCalibration);
     el.chkShowPlaque.checked = Boolean(settings.showPlaqueDebug);
+    el.chkAutoRealign.checked = Boolean(settings.autoRealignOnPlaque);
   }
 
   function commitSettings() {
@@ -121,6 +123,10 @@ export function createUIController({
   });
   el.chkShowPlaque.addEventListener('change', () => {
     settings.showPlaqueDebug = el.chkShowPlaque.checked;
+    commitSettings();
+  });
+  el.chkAutoRealign.addEventListener('change', () => {
+    settings.autoRealignOnPlaque = el.chkAutoRealign.checked;
     commitSettings();
   });
 
@@ -230,13 +236,13 @@ export function createUIController({
           ? `${info.targetScale.toFixed(3)} (к-т ${info.unitsPerMeter.toFixed(2)}x)`
           : '—';
       const distStr = info.camDistM != null ? `${info.camDistM.toFixed(2)} м` : '—';
-      const stateStr = info.isTargetVisible
-        ? 'TARGET LOCK'
-        : info.isAnchored
-          ? 'SLAM HOLD 360°'
+      const stateStr = info.isLocked
+        ? 'HARD LOCK (SLAM)'
+        : info.isTargetVisible
+          ? `CALIBRATING (${info.sampleCount}/10)`
           : 'SEARCHING';
       el.telemetryLines.textContent = [
-        `Режим: ${stateStr} | FPS: ${info.fps} | Захватов: ${info.lockCount}`,
+        `Режим: ${stateStr} | SLAM: ${info.trackingStatus} | FPS: ${info.fps}`,
         `Модель GLB: ${modelStr} | До Шурале: ${distStr}`,
         `Target scale: ${scaleStr} | Рамка: ${settings.targetWidthMm} мм`,
       ].join('\n');

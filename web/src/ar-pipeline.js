@@ -158,11 +158,15 @@ export function createShuralePipeline({
   let isModelLoaded = false;
   let modelLoadMs = 0;
   let isAnchored = false;
+  let isLocked = false;
   let isTargetVisible = false;
-  let firstLockTimestamp = 0;
   let lockCount = 0;
+  let trackingStatus = 'INIT';
 
-  let lastPlaquePose = null; // { position: Vector3, quaternion: Quaternion, scale: number }
+  const CALIBRATION_FRAMES = 10;
+  let poseSamples = [];
+  let lockedPlaquePose = null; // { position: Vector3, quaternion: Quaternion, scale: number }
+  let lastPlaquePose = null;
   let lastFrameTime = performance.now();
   let fpsAccumulator = 0;
   let fpsFrames = 0;
@@ -383,11 +387,14 @@ export function createShuralePipeline({
     );
   }
 
-  function handleImageFound({ detail }) {
-    isTargetVisible = true;
-    lockCount += 1;
+  function median(values) {
+    const sorted = [...values].sort((a, b) => a - b);
+    const mid = Math.floor(sorted.length / 2);
+    return sorted.length % 2 !== 0 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) * 0.5;
+  }
 
-    const pose = {
+  function extractPose(detail) {
+    return {
       position: new THREE.Vector3(detail.position.x, detail.position.y, detail.position.z),
       quaternion: new THREE.Quaternion(
         detail.rotation.x,
@@ -397,47 +404,108 @@ export function createShuralePipeline({
       ),
       scale: detail.scale || 0.26,
     };
+  }
+
+  function computeMedianPose(samples) {
+    const mx = median(samples.map((s) => s.x));
+    const my = median(samples.map((s) => s.y));
+    const mz = median(samples.map((s) => s.z));
+    const ms = median(samples.map((s) => s.scale));
+    // Circular mean for horizontal forward direction (fx, fz)
+    let sumFx = 0;
+    let sumFz = 0;
+    for (const s of samples) {
+      sumFx += s.fx;
+      sumFz += s.fz;
+    }
+    const len = Math.hypot(sumFx, sumFz) || 1;
+    const yaw = Math.atan2(sumFx / len, sumFz / len);
+    const quat = new THREE.Quaternion().setFromAxisAngle(WORLD_UP, yaw);
+    return {
+      position: new THREE.Vector3(mx, my, mz),
+      quaternion: quat,
+      scale: ms,
+    };
+  }
+
+  function recordCalibrationSample(pose) {
+    tmpForward.set(0, 0, 1).applyQuaternion(pose.quaternion);
+    tmpForward.y = 0;
+    if (tmpForward.lengthSq() < 1e-4) {
+      tmpForward.set(0, 0, 1);
+    } else {
+      tmpForward.normalize();
+    }
+    poseSamples.push({
+      x: pose.position.x,
+      y: pose.position.y,
+      z: pose.position.z,
+      fx: tmpForward.x,
+      fz: tmpForward.z,
+      scale: pose.scale,
+    });
+
+    const medPose = computeMedianPose(poseSamples);
+    lockedPlaquePose = medPose;
+    applyPoseToAnchor(medPose, { snap: !isAnchored, alpha: 0.35 });
+    isAnchored = true;
+    if (isModelLoaded && shuraleAnchor) {
+      shuraleAnchor.visible = true;
+    }
+
+    if (poseSamples.length >= CALIBRATION_FRAMES) {
+      isLocked = true;
+      applyPoseToAnchor(medPose, { snap: true });
+      onStatusChange?.(
+        'slam',
+        isModelLoaded ? 'Зафиксирован в комнате — обходите на 360°' : 'Точка зафиксирована, ждём модель...',
+      );
+    } else {
+      onStatusChange?.(
+        'tracking',
+        `Калибровка по табличке (${poseSamples.length}/${CALIBRATION_FRAMES})...`,
+      );
+    }
+  }
+
+  function handleImageFound({ detail }) {
+    isTargetVisible = true;
+    lockCount += 1;
+    const pose = extractPose(detail);
     lastPlaquePose = pose;
     updatePlaqueOutline(detail);
 
-    if (!isAnchored) {
-      // First lock: snap immediately onto the ground beside the plaque in SLAM world space
-      firstLockTimestamp = performance.now();
-      applyPoseToAnchor(pose, { snap: true });
-      isAnchored = true;
-      if (isModelLoaded) {
-        shuraleAnchor.visible = true;
-      }
-    } else {
-      // Re-acquired plaque after walking around: gentle smooth re-alignment
-      applyPoseToAnchor(pose, { snap: false, alpha: 0.12 });
+    if (!isLocked) {
+      recordCalibrationSample(pose);
+      return;
     }
 
-    onStatusChange?.(
-      'tracking',
-      isModelLoaded ? 'Табличка в кадре (довыравнивание)' : 'Табличка найдена, ждём модель...',
-    );
+    // Already HARD-LOCKED in SLAM world: only gently realign if user explicitly enabled it
+    const settings = getSettings();
+    if (settings.autoRealignOnPlaque) {
+      lockedPlaquePose = pose;
+      applyPoseToAnchor(pose, { snap: false, alpha: 0.04 });
+      onStatusChange?.('tracking', 'Табличка в кадре (мягкое довыравнивание)');
+    }
   }
 
   function handleImageUpdated({ detail }) {
     isTargetVisible = true;
-    const pose = {
-      position: new THREE.Vector3(detail.position.x, detail.position.y, detail.position.z),
-      quaternion: new THREE.Quaternion(
-        detail.rotation.x,
-        detail.rotation.y,
-        detail.rotation.z,
-        detail.rotation.w,
-      ),
-      scale: detail.scale || 0.26,
-    };
+    const pose = extractPose(detail);
     lastPlaquePose = pose;
     updatePlaqueOutline(detail);
 
-    const elapsedSinceFirstLock = performance.now() - firstLockTimestamp;
-    // Fast initial settle (first 1s), then gentle smooth re-alignment
-    const alpha = elapsedSinceFirstLock < 1000 ? 0.25 : 0.08;
-    applyPoseToAnchor(pose, { snap: false, alpha });
+    if (!isLocked) {
+      recordCalibrationSample(pose);
+      return;
+    }
+
+    // Hard-locked by default: ignore plaque jitter so Shurale NEVER wanders around the room!
+    const settings = getSettings();
+    if (settings.autoRealignOnPlaque) {
+      lockedPlaquePose = pose;
+      applyPoseToAnchor(pose, { snap: false, alpha: 0.04 });
+    }
   }
 
   function handleImageLost() {
@@ -446,11 +514,22 @@ export function createShuralePipeline({
       plaqueOutline.visible = false;
     }
     // CRITICAL: Do NOT hide shuraleAnchor! It remains anchored in SLAM world coordinates.
-    if (isAnchored) {
-      onStatusChange?.('slam', 'SLAM-удержание — обходите на 360°');
+    if (isLocked) {
+      onStatusChange?.('slam', 'Зафиксирован в комнате — обходите на 360°');
+    } else if (isAnchored) {
+      // User moved camera away before 10 frames finished -> lock immediately on what we have!
+      isLocked = true;
+      onStatusChange?.('slam', 'Зафиксирован в комнате — обходите на 360°');
     } else {
       onStatusChange?.('searching', 'Наведите камеру на табличку А4');
     }
+  }
+
+  function handleTrackingStatus({ detail }) {
+    if (!detail) return;
+    trackingStatus = detail.reason && detail.reason !== 'UNDEFINED'
+      ? `${detail.status}/${detail.reason}`
+      : (detail.status || 'UNKNOWN');
   }
 
   const pipelineModule = {
@@ -491,8 +570,9 @@ export function createShuralePipeline({
       if (now - lastTelemetryPush > 200) {
         lastTelemetryPush = now;
         const settings = getSettings();
-        const uPerM = lastPlaquePose
-          ? computeUnitsPerMeter(lastPlaquePose.scale, settings)
+        const activePose = lockedPlaquePose || lastPlaquePose;
+        const uPerM = activePose
+          ? computeUnitsPerMeter(activePose.scale, settings)
           : 1.0;
         const camDist =
           isAnchored && camera && shuraleAnchor
@@ -528,9 +608,12 @@ export function createShuralePipeline({
           isModelLoaded,
           modelLoadMs,
           isAnchored,
+          isLocked,
+          sampleCount: poseSamples.length,
+          trackingStatus,
           isTargetVisible,
           lockCount,
-          targetScale: lastPlaquePose ? lastPlaquePose.scale : null,
+          targetScale: activePose ? activePose.scale : null,
           unitsPerMeter: uPerM,
           camDistM: camDist,
           anchorPos: isAnchored && shuraleAnchor ? shuraleAnchor.position : null,
@@ -541,6 +624,7 @@ export function createShuralePipeline({
       { event: 'reality.imagefound', process: handleImageFound },
       { event: 'reality.imageupdated', process: handleImageUpdated },
       { event: 'reality.imagelost', process: handleImageLost },
+      { event: 'reality.trackingstatus', process: handleTrackingStatus },
     ],
   };
 
@@ -551,13 +635,17 @@ export function createShuralePipeline({
       if (plaqueOutline) {
         plaqueOutline.visible = Boolean(isTargetVisible && settings.showPlaqueDebug);
       }
-      if (isAnchored && lastPlaquePose) {
-        applyPoseToAnchor(lastPlaquePose, { snap: true });
+      const activePose = lockedPlaquePose || lastPlaquePose;
+      if (isAnchored && activePose) {
+        applyPoseToAnchor(activePose, { snap: true });
       }
     },
     resetAnchor() {
       isAnchored = false;
+      isLocked = false;
       isTargetVisible = false;
+      poseSamples = [];
+      lockedPlaquePose = null;
       lastPlaquePose = null;
       if (shuraleAnchor) shuraleAnchor.visible = false;
       if (plaqueOutline) plaqueOutline.visible = false;
