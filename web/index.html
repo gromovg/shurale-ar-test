@@ -1,0 +1,191 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta
+    name="viewport"
+    content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover"
+  />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="theme-color" content="#0f1a2b" />
+  <title>Шурале AR — Кышкы Әкият (Иннополис)</title>
+
+  <!--
+    8th Wall XR Engine Binary
+    Copyright © 2026 Niantic Spatial, Inc. All rights reserved.
+    Licensed under the XR Engine License Agreement (see ./external/xr/LICENSE).
+  -->
+  <script src="./external/xr/xr.js" async data-preload-chunks="slam"></script>
+</head>
+<body>
+  <canvas id="camerafeed"></canvas>
+
+  <!-- Top HUD -->
+  <header class="hud-top">
+    <div id="status-pill" class="status-pill status-loading">
+      <span id="status-dot" class="status-dot"></span>
+      <span id="status-text">Загрузка AR-движка...</span>
+    </div>
+    <button id="btn-telemetry" class="icon-chip" type="button" aria-label="Телеметрия" title="Показать/скрыть телеметрию">
+      INFO
+    </button>
+  </header>
+
+  <div id="telemetry-box" class="telemetry-box hidden">
+    <div id="telemetry-lines">Инициализация...</div>
+  </div>
+
+  <!-- Center subtle scan prompt (hidden once anchored) -->
+  <div id="scan-hint" class="scan-hint hidden">
+    <div class="scan-frame">
+      <span class="corner tl"></span>
+      <span class="corner tr"></span>
+      <span class="corner bl"></span>
+      <span class="corner br"></span>
+    </div>
+    <div class="scan-label">Наведите камеру на матовую табличку А4 «Кышкы Әкият»</div>
+  </div>
+
+  <!-- Start overlay (ensures valid iOS Safari user gesture for Camera + IMU Motion sensors) -->
+  <div id="start-overlay" class="modal-overlay">
+    <div class="modal-card start-card">
+      <div class="badge-chip">Кышкы Әкият • Иннополис</div>
+      <h2>Шурале AR — полевой тест</h2>
+      <p>
+        Наведите камеру на матовую табличку А4 — Шурале встанет ногами на землю рядом с ней и останется стоять при обходе на 360°.
+      </p>
+      <button id="btn-start-ar" class="btn-primary" type="button" disabled>
+        Загрузка движка SLAM...
+      </button>
+      <p class="small-legal">
+        8th Wall XR Engine · Copyright © 2026 Niantic Spatial, Inc. ·
+        <a href="./external/xr/LICENSE" target="_blank" rel="noopener">Лицензия (AS IS)</a>
+      </p>
+    </div>
+  </div>
+
+  <!-- Error / HTTPS overlay -->
+  <div id="error-overlay" class="modal-overlay hidden">
+    <div class="modal-card">
+      <h2 id="error-title">Не удалось запустить камеру</h2>
+      <p id="error-message"></p>
+      <button id="btn-retry" class="btn-primary" type="button">Попробовать снова</button>
+    </div>
+  </div>
+
+  <!-- Calibration / Debug Drawer -->
+  <section id="settings-drawer" class="settings-drawer hidden" aria-label="Настройка положения Шурале">
+    <div class="drawer-header">
+      <strong>Настройка Шурале (тест на месте)</strong>
+      <button id="btn-close-settings" class="btn-ghost-sm" type="button">Закрыть</button>
+    </div>
+
+    <div class="control-row">
+      <div class="control-label">
+        <span>Высота таблички (опустить ноги до пола)</span>
+        <strong id="val-mount-height">1.30 м</strong>
+      </div>
+      <div class="stepper-row">
+        <button class="btn-step" data-step="mountHeightM" data-delta="-0.05" type="button">−5 см</button>
+        <input id="inp-mount-height" type="range" min="0.40" max="2.30" step="0.01" value="1.30" />
+        <button class="btn-step" data-step="mountHeightM" data-delta="0.05" type="button">+5 см</button>
+      </div>
+    </div>
+
+    <div class="control-row">
+      <div class="control-label">
+        <span>Смещение вправо от таблички</span>
+        <strong id="val-offset-right">+1.20 м</strong>
+      </div>
+      <div class="stepper-row">
+        <button class="btn-step" data-step="offsetRightM" data-delta="-0.10" type="button">−10 см</button>
+        <input id="inp-offset-right" type="range" min="-2.50" max="2.50" step="0.05" value="1.20" />
+        <button class="btn-step" data-step="offsetRightM" data-delta="0.10" type="button">+10 см</button>
+      </div>
+    </div>
+
+    <div class="control-row">
+      <div class="control-label">
+        <span>Смещение вперёд от стены</span>
+        <strong id="val-offset-forward">+0.35 м</strong>
+      </div>
+      <div class="stepper-row">
+        <button class="btn-step" data-step="offsetForwardM" data-delta="-0.10" type="button">−10 см</button>
+        <input id="inp-offset-forward" type="range" min="-1.00" max="2.50" step="0.05" value="0.35" />
+        <button class="btn-step" data-step="offsetForwardM" data-delta="0.10" type="button">+10 см</button>
+      </div>
+    </div>
+
+    <div class="control-row">
+      <div class="control-label">
+        <span>Поворот Шурале</span>
+        <strong id="val-yaw">0°</strong>
+      </div>
+      <input id="inp-yaw" type="range" min="-180" max="180" step="5" value="0" />
+    </div>
+
+    <div class="control-row">
+      <div class="control-label">
+        <span>Факт. ширина рамки (по рулетке)</span>
+        <strong id="val-target-width">195 мм</strong>
+      </div>
+      <input id="inp-target-width" type="range" min="140" max="320" step="1" value="195" />
+    </div>
+
+    <div class="toggle-grid">
+      <label class="toggle-item">
+        <input id="chk-target-scale" type="checkbox" checked />
+        <span>Калибровать масштаб по табличке</span>
+      </label>
+      <label class="toggle-item">
+        <input id="chk-show-plaque" type="checkbox" checked />
+        <span>Показать рамку таблички</span>
+      </label>
+    </div>
+
+    <div class="drawer-footer">
+      <button id="btn-reset-defaults" class="btn-ghost-sm" type="button">Сбросить настройки</button>
+      <button id="btn-license" class="btn-link" type="button">© Niantic Spatial / Лицензия</button>
+    </div>
+  </section>
+
+  <!-- License attribution modal (required by XR Engine License Agreement §1.3) -->
+  <div id="license-modal" class="modal-overlay hidden">
+    <div class="modal-card">
+      <h2>8th Wall XR Engine — Attribution</h2>
+      <p>
+        Это веб-приложение использует XR Engine (SLAM и Image Targets), созданный
+        <strong>Niantic Spatial, Inc.</strong>
+      </p>
+      <p class="small-legal">
+        Copyright © 2026 Niantic Spatial, Inc. All rights reserved.<br />
+        Программное обеспечение предоставляется на условиях
+        <a href="./external/xr/LICENSE" target="_blank" rel="noopener">XR Engine License Agreement</a>
+        «КАК ЕСТЬ» («AS IS»), без каких-либо гарантий (disclaimer of warranties).
+      </p>
+      <button id="btn-close-license" class="btn-primary" type="button">Понятно</button>
+    </div>
+  </div>
+
+  <!-- Toast notification -->
+  <div id="toast" class="toast hidden"></div>
+
+  <!-- Bottom Action Bar -->
+  <nav class="hud-bottom" aria-label="Управление AR">
+    <button id="btn-reset" class="action-btn" type="button">
+      <span class="action-icon">↺</span>
+      <span>Сброс</span>
+    </button>
+    <button id="btn-torch" class="action-btn" type="button" aria-pressed="false">
+      <span class="action-icon">🔦</span>
+      <span id="torch-label">Фонарик</span>
+    </button>
+    <button id="btn-settings" class="action-btn" type="button" aria-pressed="false">
+      <span class="action-icon">⚙</span>
+      <span>Настройка</span>
+    </button>
+  </nav>
+
+  <script type="module" src="./src/main.js"></script>
+</body>
+</html>

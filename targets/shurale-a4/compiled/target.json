@@ -1,0 +1,32 @@
+{
+  "imagePath": "image-targets/shurale-a4_luminance.png",
+  "metadata": {
+    "targetName": "shurale-a4",
+    "aspectRatio": "3:4",
+    "physicalWidthMm": 195,
+    "physicalHeightMm": 260,
+    "physicalWidthMeters": 0.195,
+    "physicalHeightMeters": 0.26,
+    "printPaper": "A4 (210 x 297 mm) at 100% scale, matte paper, no lamination",
+    "note": "Measure black outer tracking frame width with a tape measure after printing and update physicalWidthMeters in the WebAR app if printer scaling differs."
+  },
+  "name": "shurale-a4",
+  "type": "PLANAR",
+  "properties": {
+    "left": 0,
+    "top": 0,
+    "width": 1500,
+    "height": 2000,
+    "isRotated": false,
+    "originalWidth": 1500,
+    "originalHeight": 2000
+  },
+  "resources": {
+    "originalImage": "shurale-a4_original.png",
+    "croppedImage": "shurale-a4_cropped.png",
+    "thumbnailImage": "shurale-a4_thumbnail.png",
+    "luminanceImage": "shurale-a4_luminance.png"
+  },
+  "created": 1795625492625,
+  "updated": 1795625492625
+}

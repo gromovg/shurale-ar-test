@@ -1,0 +1,10 @@
+node_modules/
+dist/
+web/public/
+.agents/
+3D/TDImportCache/
+3D/Shurale_Happy_Idle.glb
+Kyshky_akiyat_Shurale_Innopolis (1).pdf
+*.log
+.DS_Store
+Thumbs.db

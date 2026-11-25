@@ -1,0 +1,23 @@
+{
+  "imagePath": "image-targets/shurale-a4_luminance.png",
+  "metadata": null,
+  "name": "shurale-a4",
+  "type": "PLANAR",
+  "properties": {
+    "left": 0,
+    "top": 0,
+    "width": 1500,
+    "height": 2000,
+    "isRotated": false,
+    "originalWidth": 1500,
+    "originalHeight": 2000
+  },
+  "resources": {
+    "originalImage": "shurale-a4_original.png",
+    "croppedImage": "shurale-a4_cropped.png",
+    "thumbnailImage": "shurale-a4_thumbnail.png",
+    "luminanceImage": "shurale-a4_luminance.png"
+  },
+  "created": 1795625492625,
+  "updated": 1795625492625
+}
