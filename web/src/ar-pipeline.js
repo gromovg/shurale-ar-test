@@ -140,11 +140,13 @@ function createContactShadowTexture() {
  */
 export function createShuralePipeline({
   getSettings,
+  imageOnly = false,
   onStatusChange,
   onDirectionHint,
   onTelemetry,
   onError,
 }) {
+  const disableSlamGate = () => Boolean(imageOnly);
   let scene = null;
   let renderer = null;
   let camera = null;
@@ -162,9 +164,9 @@ export function createShuralePipeline({
   let isLocked = false;
   let isManualPlaced = false;
   let isTargetVisible = false;
-  let isSlamReady = false;
+  let isSlamReady = Boolean(imageOnly);
   let lockCount = 0;
-  let trackingStatus = 'INITIALIZING';
+  let trackingStatus = imageOnly ? 'IMAGE_ONLY' : 'INITIALIZING';
 
   const CALIBRATION_FRAMES = 10;
   let poseSamples = [];
@@ -192,7 +194,7 @@ export function createShuralePipeline({
   const tmpCamDir = new THREE.Vector3();
 
   function computeUnitsPerMeter(detailScale, settings) {
-    if (!settings.useTargetScaleCalibration) {
+    if (!settings.useTargetScaleCalibration && !imageOnly) {
       return 1.0;
     }
     const physHeightM = getTargetPhysicalHeightM(settings);
@@ -497,9 +499,7 @@ export function createShuralePipeline({
     lastPlaquePose = pose;
     updatePlaqueOutline(detail);
 
-    // Wait for absolute SLAM to finish metric scale calibration BEFORE locking Shurale,
-    // so the world coordinate system won't rescale/jump later!
-    if (!isSlamReady && !isAnchored) {
+    if (!isSlamReady && !isAnchored && !disableSlamGate()) {
       onStatusChange?.('calibrating', 'Табличка видна — поведите телефоном вбок (~40 см)');
       return;
     }
@@ -524,7 +524,7 @@ export function createShuralePipeline({
     lastPlaquePose = pose;
     updatePlaqueOutline(detail);
 
-    if (!isSlamReady && !isAnchored) {
+    if (!isSlamReady && !isAnchored && !disableSlamGate()) {
       return;
     }
 
@@ -533,8 +533,13 @@ export function createShuralePipeline({
       return;
     }
 
-    // Hard-locked by default: ignore plaque jitter so Shurale NEVER wanders around the room!
+    // Hard-locked by default in SLAM mode; in image-only fallback mode track plaque directly
     const settings = getSettings();
+    if (imageOnly) {
+      lockedPlaquePose = pose;
+      applyPoseToAnchor(pose, { snap: false, alpha: 0.25 });
+      return;
+    }
     if (settings.autoRealignOnPlaque) {
       lockedPlaquePose = pose;
       applyPoseToAnchor(pose, { snap: false, alpha: 0.04 });

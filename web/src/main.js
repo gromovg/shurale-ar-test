@@ -14,6 +14,8 @@ let arController = null;
 let torchModule = null;
 let cachedXR8 = null;
 let cachedTargetData = null;
+let currentMode = 'slam'; // 'slam' | 'image-only'
+let hasTriedFallback = false;
 
 const startOverlay = document.getElementById('start-overlay');
 const btnStartAr = document.getElementById('btn-start-ar');
@@ -26,6 +28,16 @@ const ui = createUIController({
   onToggleTorch: () => torchModule?.toggle(),
   onRetry: () => window.location.reload(),
 });
+
+function detectInAppBrowser() {
+  const ua = navigator.userAgent || '';
+  if (/Telegram/i.test(ua)) return 'Telegram';
+  if (/Instagram/i.test(ua)) return 'Instagram';
+  if (/FBAN|FBAV/i.test(ua)) return 'Facebook';
+  if (/VKAndroidApp|VKClient/i.test(ua)) return 'VK';
+  if (/WhatsApp/i.test(ua)) return 'WhatsApp';
+  return null;
+}
 
 function waitForXR8(timeoutMs = 25000) {
   return new Promise((resolve, reject) => {
@@ -57,32 +69,39 @@ async function fetchImageTarget() {
 }
 
 /**
- * Request iOS 13+ Safari motion & orientation permissions inside a user click gesture
- * so 8th Wall SLAM + absolute scale gets full IMU sensor fusion.
+ * Trigger BOTH iOS Safari motion/orientation permission requests synchronously
+ * inside the same click gesture tick (Promise.allSettled) so the user-gesture
+ * token never expires between the first and second prompt.
  */
 async function requestIOSMotionPermissions() {
-  const results = [];
+  const tasks = [];
   if (
     typeof DeviceMotionEvent !== 'undefined' &&
     typeof DeviceMotionEvent.requestPermission === 'function'
   ) {
-    try {
-      results.push(`motion:${await DeviceMotionEvent.requestPermission()}`);
-    } catch (err) {
-      results.push(`motion:err(${err?.name || err})`);
-    }
+    tasks.push(
+      DeviceMotionEvent.requestPermission()
+        .then((res) => ({ api: 'motion', state: res }))
+        .catch((err) => ({ api: 'motion', state: 'error', err })),
+    );
   }
   if (
     typeof DeviceOrientationEvent !== 'undefined' &&
     typeof DeviceOrientationEvent.requestPermission === 'function'
   ) {
-    try {
-      results.push(`orient:${await DeviceOrientationEvent.requestPermission()}`);
-    } catch (err) {
-      results.push(`orient:err(${err?.name || err})`);
-    }
+    tasks.push(
+      DeviceOrientationEvent.requestPermission()
+        .then((res) => ({ api: 'orient', state: res }))
+        .catch((err) => ({ api: 'orient', state: 'error', err })),
+    );
   }
-  return results;
+  if (!tasks.length) {
+    return { granted: true, details: 'not-required' };
+  }
+  const results = await Promise.all(tasks);
+  const denied = results.some((r) => r.state === 'denied' || r.state === 'error');
+  const details = results.map((r) => `${r.api}:${r.state}`).join(', ');
+  return { granted: !denied, details };
 }
 
 function formatErrorDetail(err) {
@@ -96,108 +115,136 @@ function formatErrorDetail(err) {
   }
 }
 
+function launchXR8({ disableWorldTracking }) {
+  const XR8 = cachedXR8;
+  currentMode = disableWorldTracking ? 'image-only' : 'slam';
+
+  try {
+    XR8.stop();
+  } catch {
+    // Not running yet
+  }
+  try {
+    XR8.clearCameraPipelineModules();
+  } catch {
+    // Ignore if unavailable
+  }
+
+  XR8.XrController.configure({
+    imageTargetData: [cachedTargetData],
+    disableWorldTracking,
+    scale: disableWorldTracking ? 'responsive' : 'absolute',
+  });
+
+  torchModule = createTorchModule({
+    onTorchStateChange: (state) => ui.setTorchState(state),
+  });
+
+  arController = createShuralePipeline({
+    getSettings: () => settings,
+    imageOnly: disableWorldTracking,
+    onStatusChange: (mode, text) => ui.setStatus(mode, text),
+    onDirectionHint: (text) => ui.setDirectionHint(text),
+    onTelemetry: (info) => ui.updateTelemetry(info),
+    onError: (title, message) => {
+      ui.setStatus('error', title);
+      ui.showError(title, message);
+    },
+  });
+
+  const cameraErrorModule = {
+    name: 'camera-error-handler',
+    onException: (err) => {
+      console.error('XR8 exception:', err);
+      const detail = formatErrorDetail(err);
+
+      // Automatic silent fallback: if full SLAM fails on a phone (e.g. blocked gyroscope),
+      // retry once in pure Image-Target mode (needs ONLY camera, zero motion sensors!)
+      if (!disableWorldTracking && !hasTriedFallback && !detail.includes('No valid session manager')) {
+        hasTriedFallback = true;
+        console.warn('SLAM failed, falling back to image-only AR mode:', detail);
+        ui.showToast('Включён упрощённый режим (держите табличку в кадре)', 3600);
+        setTimeout(() => launchXR8({ disableWorldTracking: true }), 150);
+        return;
+      }
+
+      if (detail.includes('No valid session manager')) {
+        ui.setStatus('error', 'Откройте на смартфоне');
+        ui.showError(
+          'Откройте ссылку на iPhone или Android',
+          'AR-режим требует камеру смартфона. Откройте эту ссылку в Safari (iPhone) или Chrome (Android).',
+        );
+        return;
+      }
+
+      ui.setStatus('error', 'Ошибка AR-движка');
+      ui.showError(
+        'Не удалось запустить AR-камеру',
+        `Проверьте доступ к камере в Safari (иконка слева в адресной строке → Настройки веб-сайта → Камера: Разрешить) и закройте другие приложения с камерой.\n\nКод: ${detail}`,
+      );
+    },
+    onCameraStatusChange: ({ status, reason }) => {
+      if (status === 'failed') {
+        ui.setStatus('error', 'Нет доступа к камере');
+        ui.showError(
+          'Нужен доступ к камере',
+          `Нажмите на иконку слева в адресной строке Safari → «Настройки веб-сайта» → «Камера: Разрешить», затем нажмите «Попробовать снова».${reason ? `\n\nКод: ${formatErrorDetail(reason)}` : ''}`,
+        );
+      }
+    },
+  };
+
+  XR8.addCameraPipelineModules([
+    XR8.GlTextureRenderer.pipelineModule(),
+    XR8.Threejs.pipelineModule(),
+    XR8.XrController.pipelineModule(),
+    createFullWindowCanvasModule(),
+    torchModule,
+    cameraErrorModule,
+    arController.pipelineModule,
+  ]);
+
+  const canvas = document.getElementById('camerafeed');
+  syncCanvasBufferSize(canvas);
+  XR8.run({
+    canvas,
+    allowedDevices: XR8.XrConfig.device().ANY,
+    cameraConfig: {
+      direction: XR8.XrConfig.camera().BACK,
+    },
+  });
+
+  if (disableWorldTracking) {
+    ui.setStatus('searching', 'Упрощённый режим — наведите камеру на табличку А4');
+  }
+}
+
 async function startARSession() {
   if (!cachedXR8 || !cachedTargetData) return;
 
   btnStartAr.disabled = true;
   btnStartAr.textContent = 'Запуск камеры...';
 
-  const motionRes = await requestIOSMotionPermissions();
-  const motionDenied = motionRes.some((r) => r.includes('denied'));
-  if (motionDenied) {
-    startOverlay.classList.add('hidden');
-    ui.setStatus('error', 'Нет доступа к датчикам');
-    ui.showError(
-      'Доступ к датчикам движения отклонён',
-      `Для AR нужен доступ к гироскопу. Полностью закройте Safari (смахните вверх), откройте ссылку заново и нажмите «Разрешить». (${motionRes.join(', ')})`,
-    );
-    return;
-  }
+  const motion = await requestIOSMotionPermissions();
 
   startOverlay.classList.add('hidden');
-  ui.setStatus('loading', 'Запуск камеры и SLAM...');
+  ui.setStatus('loading', 'Запуск камеры и AR...');
 
   try {
-    const XR8 = cachedXR8;
+    if (!motion.granted) {
+      // Instead of blocking the visitor with an error modal, seamlessly launch
+      // camera-only Image Target mode so they STILL see Shurale without gyroscope!
+      hasTriedFallback = true;
+      ui.showToast('Датчики движения отключены — запущен режим по табличке', 3600);
+      launchXR8({ disableWorldTracking: true });
+      return;
+    }
 
-    // Configure 8th Wall: Image Target + World Tracking (SLAM) in true 1:1 real-world meters.
-    // We wait for reality.trackingstatus === 'NORMAL' before hard-locking so walking 1 m
-    // moves the camera exactly 1 m and Shurale's size stays 100% static!
-    XR8.XrController.configure({
-      imageTargetData: [cachedTargetData],
-      disableWorldTracking: false,
-      scale: 'absolute',
-    });
-
-    torchModule = createTorchModule({
-      onTorchStateChange: (state) => ui.setTorchState(state),
-    });
-
-    arController = createShuralePipeline({
-      getSettings: () => settings,
-      onStatusChange: (mode, text) => ui.setStatus(mode, text),
-      onDirectionHint: (text) => ui.setDirectionHint(text),
-      onTelemetry: (info) => ui.updateTelemetry(info),
-      onError: (title, message) => {
-        ui.setStatus('error', title);
-        ui.showError(title, message);
-      },
-    });
-
-    const cameraErrorModule = {
-      name: 'camera-error-handler',
-      onException: (err) => {
-        console.error('XR8 exception:', err);
-        const detail = formatErrorDetail(err);
-        if (detail.includes('No valid session manager')) {
-          ui.setStatus('error', 'Откройте на смартфоне');
-          ui.showError(
-            'Откройте ссылку на iPhone или Android',
-            'Режим SLAM + Image Target требует камеру и датчики движения смартфона (iOS Safari или Android Chrome).',
-          );
-          return;
-        }
-        ui.setStatus('error', 'Ошибка AR-движка');
-        ui.showError(
-          'Ошибка запуска AR',
-          `Проверьте разрешение на камеру и датчики движения в Safari (если отказали ранее — полностью закройте Safari и откройте ссылку снова).\n\nКод: ${detail}`,
-        );
-      },
-      onCameraStatusChange: ({ status, reason }) => {
-        if (status === 'failed') {
-          ui.setStatus('error', 'Нет доступа к камере');
-          ui.showError(
-            'Доступ к камере отклонён',
-            `Разрешите доступ к камере для gromovg.github.io (кнопка слева в адресной строке → Настройки веб-сайта → Камера: Разрешить) и нажмите «Попробовать снова».${reason ? `\n\nКод: ${formatErrorDetail(reason)}` : ''}`,
-          );
-        }
-      },
-    };
-
-    XR8.addCameraPipelineModules([
-      XR8.GlTextureRenderer.pipelineModule(),
-      XR8.Threejs.pipelineModule(),
-      XR8.XrController.pipelineModule(),
-      createFullWindowCanvasModule(),
-      torchModule,
-      cameraErrorModule,
-      arController.pipelineModule,
-    ]);
-
-    const canvas = document.getElementById('camerafeed');
-    // Critical: size canvas drawing buffer to viewport × DPR BEFORE XR8.run()
-    syncCanvasBufferSize(canvas);
-    XR8.run({
-      canvas,
-      allowedDevices: XR8.XrConfig.device().ANY,
-      cameraConfig: {
-        direction: XR8.XrConfig.camera().BACK,
-      },
-    });
+    launchXR8({ disableWorldTracking: false });
   } catch (err) {
     console.error('Start AR error:', err);
     ui.setStatus('error', 'Ошибка запуска AR');
-    ui.showError('Ошибка запуска AR-прототипа', err?.message || String(err));
+    ui.showError('Ошибка запуска AR-прототипа', formatErrorDetail(err));
   }
 }
 
@@ -207,7 +254,18 @@ async function preload() {
     ui.setStatus('error', 'Требуется HTTPS');
     ui.showError(
       'Нужен HTTPS для доступа к камере',
-      'iOS Safari и Android Chrome блокируют камеру на обычном HTTP. Откройте прототип по HTTPS-ссылке (Cloudflare Pages / GitHub Pages / туннель).',
+      'iOS Safari и Android Chrome блокируют камеру на обычном HTTP. Откройте прототип по HTTPS-ссылке.',
+    );
+    return;
+  }
+
+  const inApp = detectInAppBrowser();
+  if (inApp) {
+    startOverlay.classList.add('hidden');
+    ui.setStatus('error', `Откройте в Safari / Chrome`);
+    ui.showError(
+      `Открыто внутри ${inApp}`,
+      `Встроенный браузер ${inApp} часто блокирует AR-камеру. Нажмите меню (⋯ или «Поделиться») и выберите «Открыть в Safari» / «Открыть в Chrome».`,
     );
     return;
   }
@@ -227,7 +285,7 @@ async function preload() {
     console.error('Preload error:', err);
     startOverlay.classList.add('hidden');
     ui.setStatus('error', 'Ошибка загрузки');
-    ui.showError('Ошибка загрузки ресурсов', err?.message || String(err));
+    ui.showError('Ошибка загрузки ресурсов', formatErrorDetail(err));
   }
 }
 
