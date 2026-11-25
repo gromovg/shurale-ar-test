@@ -1,0 +1,453 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta
+    name="viewport"
+    content="width=device-width, initial-scale=1.0, minimum-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover, interactive-widget=resizes-content"
+  />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="theme-color" content="#0e182a" />
+  <title>Шурале AR — Кышкы Әкият (Иннополис)</title>
+
+  <!--
+    8th Wall XR Engine Binary
+    Copyright © 2026 Niantic Spatial, Inc. All rights reserved.
+    Licensed under the XR Engine License Agreement (see ./external/xr/LICENSE).
+  -->
+  <script src="./external/xr/xr.js" async data-preload-chunks="slam"></script>
+  <script type="module" crossorigin src="./assets/index-BI4c1rzX.js"></script>
+  <link rel="stylesheet" crossorigin href="./assets/index-SM8DXZKx.css">
+</head>
+<body class="is-welcome-open">
+  <canvas id="camerafeed"></canvas>
+
+  <!-- Camera shutter flash overlay -->
+  <div id="shutter-flash" class="shutter-flash" aria-hidden="true"></div>
+
+  <!-- Top HUD: single centered friendly status pill (triple-tap opens hidden test bar) -->
+  <header class="hud-top">
+    <button
+      id="status-pill"
+      class="status-pill status-loading"
+      type="button"
+      aria-live="polite"
+      title="Тройной тап открывает панель настройки"
+    >
+      <span id="status-dot" class="status-dot"></span>
+      <span id="status-text">Готовим камеру...</span>
+    </button>
+
+    <!-- Hidden Developer / Field-Calibration Bar (revealed via 3x tap on status pill or ?dev=1) -->
+    <div id="dev-toolbar" class="dev-toolbar hidden" role="toolbar" aria-label="Панель настройки">
+      <button id="btn-reset" class="dev-chip" type="button">↺ Сброс</button>
+      <button id="btn-dev-skip" class="dev-chip" type="button" title="Пропустить сканирование таблички">⚡ Пропуск</button>
+      <button id="btn-settings" class="dev-chip" type="button" aria-pressed="false">⚙ Настр.</button>
+      <button id="btn-telemetry" class="dev-chip" type="button" aria-pressed="false">INFO</button>
+      <button id="btn-close-dev" class="dev-chip dev-chip-close" type="button" aria-label="Скрыть панель">✕</button>
+    </div>
+  </header>
+
+  <!-- Active video recording timer pill (visible only while recording) -->
+  <div id="rec-indicator" class="rec-indicator hidden" aria-live="polite">
+    <span class="rec-dot"></span>
+    <span id="rec-timer">00:00</span>
+    <span class="rec-limit">/ 00:30</span>
+  </div>
+
+  <!-- Telemetry readout (only inside hidden dev mode) -->
+  <div id="telemetry-box" class="telemetry-box hidden">
+    <div id="telemetry-lines">Инициализация...</div>
+  </div>
+
+  <!-- Subtle off-screen direction hint when Shurale is placed outside current view -->
+  <div id="direction-hint" class="direction-hint hidden"></div>
+
+  <!-- STAGE 2: Interactive horizontal pan calibration coach with live progress bar -->
+  <div id="calibration-coach" class="calib-coach hidden" aria-live="polite">
+    <div class="calib-card">
+      <div class="calib-anim-stage" aria-hidden="true">
+        <!-- Curved horizontal track & directional arrows -->
+        <svg class="calib-track-svg" viewBox="0 0 220 72" fill="none">
+          <path
+            d="M34 44 Q110 56 186 44"
+            stroke="#0E182A"
+            stroke-width="2"
+            stroke-dasharray="4 5"
+            stroke-linecap="round"
+            opacity="0.35"
+          />
+          <path d="M40 37 L28 44 L40 50" stroke="#0E182A" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" opacity="0.55" />
+          <path d="M180 37 L192 44 L180 50" stroke="#0E182A" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" opacity="0.55" />
+        </svg>
+        <!-- Slowly sliding phone silhouette -->
+        <div class="calib-phone-mover">
+          <svg class="calib-phone-svg" viewBox="0 0 36 56" fill="none">
+            <rect x="2" y="2" width="32" height="52" rx="7" fill="#F7F6F2" stroke="#0E182A" stroke-width="2.4" />
+            <rect x="13" y="6" width="10" height="2.8" rx="1.4" fill="#0E182A" />
+            <circle cx="18" cy="28" r="7" fill="#E5EEF6" stroke="#1E4D4B" stroke-width="2" />
+            <circle cx="18" cy="28" r="2.2" fill="#C9382B" />
+            <rect x="12" y="47" width="12" height="2.4" rx="1.2" fill="#0E182A" opacity="0.45" />
+          </svg>
+        </div>
+      </div>
+
+      <div id="calib-title" class="calib-title">Медленно ведите телефон вбок</div>
+
+      <div class="calib-bar-row">
+        <div class="calib-bar-track" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+          <div id="calib-bar-fill" class="calib-bar-fill"></div>
+        </div>
+        <span id="calib-percent" class="calib-percent">0%</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- STAGE 3: Plaque scanning frame (hidden once plaque is scanned) -->
+  <div id="scan-hint" class="scan-hint hidden">
+    <div id="scan-frame" class="scan-frame">
+      <span class="corner tl"></span>
+      <span class="corner tr"></span>
+      <span class="corner bl"></span>
+      <span class="corner br"></span>
+    </div>
+    <div id="scan-label" class="scan-label">Наведите на табличку А4</div>
+  </div>
+
+  <!-- STAGE 3 bottom corner: ONLY Torch button while scanning plaque -->
+  <div id="scan-torch-dock" class="scan-torch-dock hidden">
+    <div class="side-action">
+      <button
+        id="btn-scan-torch"
+        class="circle-btn"
+        type="button"
+        aria-pressed="false"
+        aria-label="Фонарик"
+      >
+        <svg class="circle-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M9 18h6" />
+          <path d="M10 22h4" />
+          <path d="M12 2a6 6 0 0 0-3.5 10.9c.6.4 1 1.1 1 1.9V15h5v-.2c0-.8.4-1.5 1-1.9A6 6 0 0 0 12 2z" />
+        </svg>
+      </button>
+      <span id="scan-torch-label" class="side-label">Свет</span>
+    </div>
+  </div>
+
+  <!-- STAGE 4: Floor placement dock — ONLY the primary "Поставить" button (+ Cancel when relocating) -->
+  <div id="place-stage-dock" class="place-stage-dock hidden" aria-label="Размещение Шурале">
+    <button
+      id="btn-place-primary"
+      class="place-hero-btn"
+      type="button"
+    >
+      <svg class="place-hero-icon" viewBox="0 0 28 28" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <ellipse cx="12" cy="24" rx="8.5" ry="2.3" />
+        <circle cx="12" cy="11.2" r="2.5" fill="currentColor" stroke="none" />
+        <path d="M8.6 18.6 C8.6 15.8 9.9 14.8 12 14.8 C14.1 14.8 15.4 15.8 15.4 18.6" />
+        <path d="M10.4 18.6 V23.2 M13.6 18.6 V23.2" />
+        <path d="M25.5 4.2 L20.2 3 C18.8 2.7 17.5 3.3 16.6 4.4 L14.6 7 C14.1 7.7 14.6 8.7 15.5 8.6 L18 8.1" />
+        <path d="M18 8.1 L19.8 7.8 C20.6 7.7 21.1 8.5 20.6 9.2 L19.1 11 C18.5 11.7 17.6 12.1 16.7 12.1 L15.6 12.1" />
+        <path d="M17.2 12.1 C19.8 12.4 22.4 11.4 24.4 9.5 L26 8" />
+      </svg>
+      <span>Поставить</span>
+    </button>
+    <button id="btn-cancel-relocate" class="btn-cancel-pill hidden" type="button">
+      Отмена
+    </button>
+  </div>
+
+  <!-- STAGE 1: Welcome bottom sheet (valid iOS Safari user gesture for Camera + IMU sensors) -->
+  <div id="start-overlay" class="sheet-overlay">
+    <div class="welcome-card">
+      <svg class="folk-star" viewBox="0 0 44 44" fill="none" aria-hidden="true">
+        <polygon
+          points="22,2 26,16 40,20 26,24 22,38 18,24 4,20 18,16"
+          fill="#E09F2D"
+          stroke="#0E182A"
+          stroke-width="1.6"
+        />
+        <circle cx="22" cy="20" r="3.6" fill="#C9382B" />
+      </svg>
+
+      <div class="welcome-copy">
+        <h1>Встреть Шурале вживую</h1>
+        <p>
+          Наведи камеру на табличку «Кышкы Әкият», а затем выбери место на земле и поставь Шурале в полный рост. Можно обойти вокруг и снять фото или видео.
+        </p>
+      </div>
+
+      <div class="welcome-highlights">
+        <span class="highlight-item">
+          <span class="hl-dot hl-pine"></span>
+          360° обход
+        </span>
+        <span class="highlight-item">
+          <span class="hl-dot hl-red"></span>
+          Фото и видео
+        </span>
+        <span class="highlight-item">
+          <span class="hl-dot hl-ochre"></span>
+          В галерею
+        </span>
+      </div>
+
+      <button id="btn-start-ar" class="btn-primary" type="button" disabled>
+        Готовим камеру...
+      </button>
+
+      <p class="small-legal">
+        Иннополис, Кышкы Әкият · 8th Wall XR (Niantic Spatial, Inc.) ·
+        <a href="./external/xr/LICENSE" target="_blank" rel="noopener">Лицензия</a>
+      </p>
+    </div>
+  </div>
+
+  <!-- Error / HTTPS overlay -->
+  <div id="error-overlay" class="modal-overlay hidden">
+    <div class="modal-card">
+      <h2 id="error-title">Не удалось открыть камеру</h2>
+      <p id="error-message"></p>
+      <button id="btn-retry" class="btn-primary" type="button">Попробовать снова</button>
+    </div>
+  </div>
+
+  <!-- Calibration / Debug Drawer (accessible from triple-tap dev bar) -->
+  <section id="settings-drawer" class="settings-drawer hidden" aria-label="Настройка положения Шурале">
+    <div class="drawer-header">
+      <strong>Настройка Шурале (тест на месте)</strong>
+      <button id="btn-close-settings" class="btn-ghost-sm" type="button">Закрыть</button>
+    </div>
+
+    <div class="preset-row">
+      <button id="btn-preset-full" class="btn-preset" type="button">Улица / пол (1,6 м)</button>
+      <button id="btn-preset-desk" class="btn-preset" type="button">Тест у монитора (мини)</button>
+    </div>
+
+    <div class="control-row">
+      <div class="control-label">
+        <span>Высота таблички (опустить ноги до пола)</span>
+        <strong id="val-mount-height">1.30 м</strong>
+      </div>
+      <div class="stepper-row">
+        <button class="btn-step" data-step="mountHeightM" data-delta="-0.05" type="button">−5 см</button>
+        <input id="inp-mount-height" type="range" min="0.00" max="2.30" step="0.01" value="1.30" />
+        <button class="btn-step" data-step="mountHeightM" data-delta="0.05" type="button">+5 см</button>
+      </div>
+    </div>
+
+    <div class="control-row">
+      <div class="control-label">
+        <span>Смещение вправо от таблички</span>
+        <strong id="val-offset-right">+1.20 м</strong>
+      </div>
+      <div class="stepper-row">
+        <button class="btn-step" data-step="offsetRightM" data-delta="-0.10" type="button">−10 см</button>
+        <input id="inp-offset-right" type="range" min="-2.50" max="2.50" step="0.05" value="1.20" />
+        <button class="btn-step" data-step="offsetRightM" data-delta="0.10" type="button">+10 см</button>
+      </div>
+    </div>
+
+    <div class="control-row">
+      <div class="control-label">
+        <span>Смещение вперёд от стены</span>
+        <strong id="val-offset-forward">+0.35 м</strong>
+      </div>
+      <div class="stepper-row">
+        <button class="btn-step" data-step="offsetForwardM" data-delta="-0.10" type="button">−10 см</button>
+        <input id="inp-offset-forward" type="range" min="-1.00" max="2.50" step="0.05" value="0.35" />
+        <button class="btn-step" data-step="offsetForwardM" data-delta="0.10" type="button">+10 см</button>
+      </div>
+    </div>
+
+    <div class="control-row">
+      <div class="control-label">
+        <span>Поворот Шурале</span>
+        <strong id="val-yaw">0°</strong>
+      </div>
+      <input id="inp-yaw" type="range" min="-180" max="180" step="5" value="0" />
+    </div>
+
+    <div class="control-row">
+      <div class="control-label">
+        <span>Факт. ширина рамки (по рулетке)</span>
+        <strong id="val-target-width">195 мм</strong>
+      </div>
+      <input id="inp-target-width" type="range" min="140" max="320" step="1" value="195" />
+    </div>
+
+    <div class="toggle-grid">
+      <label class="toggle-item">
+        <input id="chk-target-scale" type="checkbox" />
+        <span>Калибровать масштаб по табличке (обычно выкл в 1:1)</span>
+      </label>
+      <label class="toggle-item">
+        <input id="chk-show-plaque" type="checkbox" checked />
+        <span>Показать рамку таблички</span>
+      </label>
+      <label class="toggle-item">
+        <input id="chk-auto-realign" type="checkbox" />
+        <span>Авто-довыравнивание при взгляде на табличку</span>
+      </label>
+    </div>
+
+    <div class="drawer-footer">
+      <button id="btn-reset-defaults" class="btn-ghost-sm" type="button">Сбросить настройки</button>
+      <button id="btn-license" class="btn-link" type="button">© Niantic Spatial / Лицензия</button>
+    </div>
+  </section>
+
+  <!-- License attribution modal (required by XR Engine License Agreement §1.3) -->
+  <div id="license-modal" class="modal-overlay hidden">
+    <div class="modal-card">
+      <h2>8th Wall XR Engine — Attribution</h2>
+      <p>
+        Это веб-приложение использует XR Engine (SLAM и Image Targets), созданный
+        <strong>Niantic Spatial, Inc.</strong>
+      </p>
+      <p class="small-legal">
+        Copyright © 2026 Niantic Spatial, Inc. All rights reserved.<br />
+        Программное обеспечение предоставляется на условиях
+        <a href="./external/xr/LICENSE" target="_blank" rel="noopener">XR Engine License Agreement</a>
+        «КАК ЕСТЬ» («AS IS»), без каких-либо гарантий (disclaimer of warranties).
+      </p>
+      <button id="btn-close-license" class="btn-primary" type="button">Понятно</button>
+    </div>
+  </div>
+
+  <!-- Winter Postcard Photo / Video Preview & Save-to-Gallery Modal -->
+  <div
+    id="capture-preview-modal"
+    class="preview-modal hidden"
+    role="dialog"
+    aria-modal="true"
+    aria-label="Просмотр и сохранение"
+  >
+    <div class="preview-topbar">
+      <span id="preview-meta" class="preview-meta">Фото готово</span>
+      <button id="btn-preview-close" class="preview-close-btn" type="button" aria-label="Закрыть">
+        ✕
+      </button>
+    </div>
+
+    <div class="preview-postcard">
+      <div class="preview-stage">
+        <img id="preview-image" class="preview-media hidden" alt="Фото с Шурале" />
+        <video
+          id="preview-video"
+          class="preview-media hidden"
+          controls
+          playsinline
+          webkit-playsinline
+          autoplay
+          loop
+          muted
+        ></video>
+      </div>
+      <div class="postcard-caption">
+        <span class="postcard-title">Шурале, Иннополис</span>
+        <span class="postcard-event">Кышкы Әкият</span>
+      </div>
+    </div>
+
+    <div class="preview-footer">
+      <p id="preview-hint" class="preview-hint"></p>
+      <div class="preview-actions">
+        <button id="btn-preview-primary" class="btn-primary" type="button">
+          Сохранить в галерею
+        </button>
+        <div class="preview-secondary-row">
+          <button id="btn-preview-retake" class="btn-secondary" type="button">
+            Снять ещё
+          </button>
+          <button id="btn-preview-secondary" class="btn-secondary" type="button">
+            Поделиться
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Toast notification -->
+  <div id="toast" class="toast hidden"></div>
+
+  <!-- STAGE 5: Full Camera Dock (visible ONLY after Shurale is placed) -->
+  <div id="capture-dock" class="capture-dock hidden" aria-label="Съёмка фото и видео">
+    <div id="capture-mode-switch" class="mode-switch" role="tablist" aria-label="Режим съёмки">
+      <button
+        id="btn-mode-photo"
+        class="mode-pill is-active"
+        type="button"
+        role="tab"
+        aria-selected="true"
+      >
+        Фото
+      </button>
+      <button
+        id="btn-mode-video"
+        class="mode-pill"
+        type="button"
+        role="tab"
+        aria-selected="false"
+      >
+        Видео
+      </button>
+    </div>
+
+    <div class="camera-row">
+      <!-- Relocate Shurale to another spot -->
+      <div id="relocate-wrap" class="side-action">
+        <button
+          id="btn-relocate"
+          class="circle-btn"
+          type="button"
+          aria-label="Переставить Шурале в другое место"
+        >
+          <svg class="circle-icon circle-icon-place" viewBox="0 0 28 28" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <ellipse cx="12" cy="24" rx="8.5" ry="2.3" />
+            <circle cx="12" cy="11.2" r="2.5" fill="currentColor" stroke="none" />
+            <path d="M8.6 18.6 C8.6 15.8 9.9 14.8 12 14.8 C14.1 14.8 15.4 15.8 15.4 18.6" />
+            <path d="M10.4 18.6 V23.2 M13.6 18.6 V23.2" />
+            <path d="M25.5 4.2 L20.2 3 C18.8 2.7 17.5 3.3 16.6 4.4 L14.6 7 C14.1 7.7 14.6 8.7 15.5 8.6 L18 8.1" />
+            <path d="M18 8.1 L19.8 7.8 C20.6 7.7 21.1 8.5 20.6 9.2 L19.1 11 C18.5 11.7 17.6 12.1 16.7 12.1 L15.6 12.1" />
+            <path d="M17.2 12.1 C19.8 12.4 22.4 11.4 24.4 9.5 L26 8" />
+          </svg>
+        </button>
+        <span class="side-label">Переставить</span>
+      </div>
+
+      <!-- Hero tactile shutter button -->
+      <button
+        id="btn-shutter"
+        class="shutter-btn mode-photo"
+        type="button"
+        aria-label="Сделать фото"
+      >
+        <svg class="shutter-progress-ring" viewBox="0 0 80 80" aria-hidden="true">
+          <circle id="shutter-ring-bar" class="shutter-ring-bar" cx="40" cy="40" r="36" />
+        </svg>
+        <span class="shutter-inner"></span>
+      </button>
+
+      <!-- Rear flashlight / lantern -->
+      <div class="side-action">
+        <button
+          id="btn-torch"
+          class="circle-btn"
+          type="button"
+          aria-pressed="false"
+          aria-label="Фонарик"
+        >
+          <svg class="circle-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M9 18h6" />
+            <path d="M10 22h4" />
+            <path d="M12 2a6 6 0 0 0-3.5 10.9c.6.4 1 1.1 1 1.9V15h5v-.2c0-.8.4-1.5 1-1.9A6 6 0 0 0 12 2z" />
+          </svg>
+        </button>
+        <span id="torch-label" class="side-label">Свет</span>
+      </div>
+    </div>
+  </div>
+
+</body>
+</html>
