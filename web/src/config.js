@@ -1,35 +1,33 @@
-const STORAGE_KEY = 'shurale_ar_settings_v1';
+const STORAGE_KEY = 'shurale_ar_settings_v2';
 
 export const DEFAULT_SETTINGS = {
-  // Height of the physical plaque center above the floor/ground (meters)
-  // Default 1.30 m matches PLAN.md (home test ~1.3 m, outdoor ~1.2-1.5 m)
-  mountHeightM: 1.30,
+  // Height of the physical plaque/monitor center above the floor (meters)
+  // Set to user's measured monitor center height: 1.01 m
+  mountHeightM: 1.01,
 
   // Lateral offset to the right of the plaque (+X in plaque frame, meters)
-  offsetRightM: 1.20,
+  offsetRightM: 0.85,
 
   // Forward offset out from the plaque plane (+Z toward viewer, meters)
-  offsetForwardM: 0.35,
+  offsetForwardM: 0.50,
 
   // Extra Y-axis rotation of Shurale relative to facing forward out of plaque (degrees)
   yawOffsetDeg: 0,
 
-  // Character scale multiplier (1.0 = real 1.60 m height; 0.2 = 32 cm desk test)
+  // Character scale multiplier (1.0 = real 1.60 m height; 0.22 = 35 cm desk test)
   modelScale: 1.0,
 
   // Actual tape-measured width of the black outer 3:4 tracking frame (mm)
-  // Designed print size at 100% on A4 is 195 x 260 mm (aspect 3:4)
-  targetWidthMm: 195,
+  // Set to user's measured monitor frame width: 170 mm (17 cm)
+  targetWidthMm: 170,
 
   // Calibrate real-world meter scale directly from physical plaque size (detail.scale / targetHeightM)
-  // Prevents wrong initial scale before SLAM absolute scale finishes converging!
   useTargetScaleCalibration: true,
 
   // Show green wireframe outline on the plaque while it is in view
   showPlaqueDebug: true,
 
   // Keep Shurale hard-locked in SLAM world after initial calibration (prevents angle-jitter jumps).
-  // When true, looking back at the plaque gently pulls Shurale toward the newly measured pose.
   autoRealignOnPlaque: false,
 };
 
@@ -39,6 +37,7 @@ export const PRESET_FULL_FLOOR = {
   offsetForwardM: 0.35,
   yawOffsetDeg: 0,
   modelScale: 1.0,
+  targetWidthMm: 195,
 };
 
 export const PRESET_DESK_MINI = {
@@ -47,6 +46,7 @@ export const PRESET_DESK_MINI = {
   offsetForwardM: 0.08,
   yawOffsetDeg: 0,
   modelScale: 0.22,
+  targetWidthMm: 170,
 };
 
 export const TARGET_ASPECT_W_OVER_H = 3 / 4; // 0.75 (portrait 3:4)
