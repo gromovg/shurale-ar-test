@@ -361,7 +361,7 @@ export function createShuralePipeline({
     // Load optimized Shurale GLB (1.60 m real-world height, feet at Y = 0)
     const t0 = performance.now();
     const loader = new GLTFLoader();
-    onStatusChange?.('loading', 'Загрузка 3D-модели Шурале...');
+    onStatusChange?.('loading', 'Зовём Шурале...');
 
     loader.load(
       './models/Shurale_Happy_Idle_opt.glb',
@@ -389,20 +389,17 @@ export function createShuralePipeline({
         isModelLoaded = true;
         if (isAnchored) {
           shuraleAnchor.visible = true;
-          onStatusChange?.(
-            'slam',
-            'Зафиксирован (1,6 м) — обходите на 360°',
-          );
+          onStatusChange?.('slam', 'Шурале стоит здесь');
         } else if (isSlamReady) {
-          onStatusChange?.('searching', 'SLAM готов (1:1 м) — наведи на табличку или «Сюда»');
+          onStatusChange?.('searching', 'Наведите на табличку или нажмите «Рядом»');
         } else {
-          onStatusChange?.('calibrating', 'Поведите телефоном вбок (~40 см) — калибровка метров');
+          onStatusChange?.('calibrating', 'Плавно поведите телефоном вбок');
         }
       },
       (evt) => {
         if (evt.total > 0) {
           const pct = Math.min(99, Math.round((evt.loaded / evt.total) * 100));
-          onStatusChange?.('loading', `Загрузка Шурале: ${pct}%`);
+          onStatusChange?.('loading', `Зовём Шурале: ${pct}%`);
         }
       },
       (err) => {
@@ -483,12 +480,12 @@ export function createShuralePipeline({
       applyPoseToAnchor(medPose, { snap: true });
       onStatusChange?.(
         'slam',
-        isModelLoaded ? 'Зафиксирован в комнате — обходите на 360°' : 'Точка зафиксирована, ждём модель...',
+        isModelLoaded ? 'Шурале стоит здесь' : 'Место найдено, зовём Шурале...',
       );
     } else {
       onStatusChange?.(
         'tracking',
-        `Калибровка по табличке (${poseSamples.length}/${CALIBRATION_FRAMES})...`,
+        'Узнали табличку, ставим Шурале...',
       );
     }
   }
@@ -501,7 +498,7 @@ export function createShuralePipeline({
     updatePlaqueOutline(detail);
 
     if (!isSlamReady && !isAnchored && !disableSlamGate()) {
-      onStatusChange?.('calibrating', 'Табличка видна — поведите телефоном вбок (~40 см)');
+      onStatusChange?.('calibrating', 'Табличка видна — поведите телефоном вбок');
       return;
     }
 
@@ -515,7 +512,7 @@ export function createShuralePipeline({
     if (settings.autoRealignOnPlaque) {
       lockedPlaquePose = pose;
       applyPoseToAnchor(pose, { snap: false, alpha: 0.04 });
-      onStatusChange?.('tracking', 'Табличка в кадре (мягкое довыравнивание)');
+      onStatusChange?.('tracking', 'Шурале стоит здесь');
     }
   }
 
@@ -554,15 +551,15 @@ export function createShuralePipeline({
     }
     // CRITICAL: Do NOT hide shuraleAnchor! It remains anchored in SLAM world coordinates.
     if (isLocked) {
-      onStatusChange?.('slam', 'Зафиксирован (1,6 м) — обходите на 360°');
+      onStatusChange?.('slam', 'Шурале стоит здесь');
     } else if (isAnchored) {
       // User moved camera away before 10 frames finished -> lock immediately on what we have!
       isLocked = true;
-      onStatusChange?.('slam', 'Зафиксирован (1,6 м) — обходите на 360°');
+      onStatusChange?.('slam', 'Шурале стоит здесь');
     } else if (isSlamReady) {
-      onStatusChange?.('searching', 'SLAM готов (1:1 м) — наведи на табличку или «Сюда»');
+      onStatusChange?.('searching', 'Наведите на табличку или нажмите «Рядом»');
     } else {
-      onStatusChange?.('calibrating', 'Поведите телефоном вбок (~40 см) — калибровка метров');
+      onStatusChange?.('calibrating', 'Плавно поведите телефоном вбок');
     }
   }
 
@@ -614,7 +611,7 @@ export function createShuralePipeline({
     if (detail.status === 'NORMAL' && !isSlamReady) {
       isSlamReady = true;
       if (!isAnchored && isModelLoaded) {
-        onStatusChange?.('searching', 'SLAM готов (1:1 м) — наведи на табличку или «Сюда»');
+        onStatusChange?.('searching', 'Наведите на табличку или нажмите «Рядом»');
       }
     }
   }
@@ -769,8 +766,8 @@ export function createShuralePipeline({
       onStatusChange?.(
         'slam',
         isSlamReady
-          ? 'Зафиксирован (1:1 м) — обходите на 360°'
-          : 'Поставлен (SLAM ещё калибруется)',
+          ? 'Шурале стоит здесь'
+          : 'Шурале поставлен рядом',
       );
       return {
         ok: true,
@@ -826,7 +823,7 @@ export function createShuralePipeline({
         console.warn('recenter warning:', err);
       }
       onDirectionHint?.(null);
-      onStatusChange?.('calibrating', 'Сброшено — поведите телефоном вбок (~40 см)');
+      onStatusChange?.('calibrating', 'Плавно поведите телефоном вбок');
     },
   };
 }

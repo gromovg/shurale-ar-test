@@ -15,7 +15,7 @@ import {
   formatDuration,
 } from './capture.js';
 
-const RING_RADIUS = 35;
+const RING_RADIUS = 36;
 const RING_CIRCUMFERENCE = 2 * Math.PI * RING_RADIUS;
 
 export function createUIController({
@@ -33,6 +33,8 @@ export function createUIController({
   const el = {
     statusPill: document.getElementById('status-pill'),
     statusText: document.getElementById('status-text'),
+    devToolbar: document.getElementById('dev-toolbar'),
+    btnCloseDev: document.getElementById('btn-close-dev'),
     scanHint: document.getElementById('scan-hint'),
     scanLabel: document.getElementById('scan-label'),
     directionHint: document.getElementById('direction-hint'),
@@ -99,6 +101,11 @@ export function createUIController({
   let isFinalizing = false;
   let isCapturingPhoto = false;
 
+  // Triple-tap gesture state for hidden field-test toolbar
+  let devTapCount = 0;
+  let devTapTimer = null;
+  let devBarOpen = new URLSearchParams(window.location.search).has('dev');
+
   let activeMedia = null;
   let activePreviewUrl = null;
   let primaryAction = null;
@@ -118,9 +125,45 @@ export function createUIController({
     }, durationMs);
   }
 
+  function setDrawerOpen(open) {
+    el.settingsDrawer.classList.toggle('hidden', !open);
+    el.btnSettings.setAttribute('aria-pressed', String(open));
+    syncCaptureDockVisibility();
+  }
+
+  function setDevBarOpen(open) {
+    devBarOpen = Boolean(open);
+    el.devToolbar.classList.toggle('hidden', !devBarOpen);
+    if (!devBarOpen) {
+      el.telemetryBox.classList.add('hidden');
+      el.btnTelemetry.setAttribute('aria-pressed', 'false');
+      setDrawerOpen(false);
+    }
+  }
+
+  // Reveal dev bar automatically if ?dev=1 is in URL
+  if (devBarOpen) {
+    el.devToolbar.classList.remove('hidden');
+  }
+
+  // Secret triple-tap on the top status pill reveals/hides the calibration toolbar
+  el.statusPill.addEventListener('click', () => {
+    devTapCount += 1;
+    clearTimeout(devTapTimer);
+    devTapTimer = setTimeout(() => {
+      devTapCount = 0;
+    }, 800);
+    if (devTapCount >= 3) {
+      devTapCount = 0;
+      setDevBarOpen(!devBarOpen);
+      showToast(devBarOpen ? 'Панель настройки открыта' : 'Панель настройки скрыта', 1800);
+    }
+  });
+
+  el.btnCloseDev.addEventListener('click', () => setDevBarOpen(false));
+
   function triggerShutterFlash() {
     el.shutterFlash.classList.remove('flash-active');
-    // Force reflow so rapid consecutive photos re-trigger animation cleanly
     void el.shutterFlash.offsetWidth;
     el.shutterFlash.classList.add('flash-active');
     if (navigator.vibrate) {
@@ -163,7 +206,7 @@ export function createUIController({
   function setCaptureMode(mode) {
     if (isRecording || isFinalizing) return;
     if (mode === 'video' && !videoSupported) {
-      showToast('Запись видео не поддерживается этим браузером. Используйте Safari (iOS) или Chrome.', 3600);
+      showToast('Запись видео не поддерживается этим браузером. Откройте в Safari или Chrome.', 3600);
       return;
     }
     captureMode = mode;
@@ -189,13 +232,14 @@ export function createUIController({
       setRecordingProgress({ elapsedMs: 0, maxDurationMs: MAX_VIDEO_DURATION_MS });
     }
     if (isFinalizing) {
-      showToast('Сохранение видео...', 2000);
+      showToast('Сохраняем видео...', 2000);
     }
     updateShutterAppearance();
   }
 
   function closeMediaPreview() {
     el.previewModal.classList.add('hidden');
+    document.body.classList.remove('is-preview-open');
     el.previewImage.classList.add('hidden');
     el.previewImage.removeAttribute('src');
 
@@ -226,13 +270,13 @@ export function createUIController({
     const isPhoto = media.kind === 'photo';
     const sizeText = formatFileSize(media.blob.size);
     if (isPhoto) {
-      el.previewMeta.textContent = `Фото • JPG • ${sizeText}`;
+      el.previewMeta.textContent = `Фото готово · ${sizeText}`;
       el.previewImage.src = activePreviewUrl;
       el.previewImage.classList.remove('hidden');
     } else {
       const extUpper = (media.ext || 'mp4').toUpperCase();
-      const durText = media.durationMs ? ` • ${formatDuration(media.durationMs)}` : '';
-      el.previewMeta.textContent = `Видео ${extUpper}${durText} • ${sizeText}`;
+      const durText = media.durationMs ? ` · ${formatDuration(media.durationMs)}` : '';
+      el.previewMeta.textContent = `Видео ${extUpper}${durText} · ${sizeText}`;
       el.previewVideo.src = activePreviewUrl;
       el.previewVideo.muted = true;
       el.previewVideo.playsInline = true;
@@ -250,9 +294,9 @@ export function createUIController({
       if (res.ok) {
         showToast(
           isPhoto
-            ? 'Готово! Ищите фото в галерее «Фото»'
-            : 'Готово! Ищите видео в галерее «Фото»',
-          3200,
+            ? 'Готово! Фото в приложении «Фото»'
+            : 'Готово! Видео в приложении «Фото»',
+          3000,
         );
       } else if (!res.aborted) {
         downloadMediaFile(activeMedia.blob, activeMedia.filename);
@@ -264,9 +308,9 @@ export function createUIController({
       if (!activeMedia?.blob) return;
       downloadMediaFile(activeMedia.blob, activeMedia.filename);
       if (android) {
-        showToast('Сохранено! Файл появится в Галерее и папке «Загрузки»', 3400);
+        showToast('Сохранено в Галерею и папку «Загрузки»', 3200);
       } else if (ios) {
-        showToast('Файл отправлен в «Загрузки» Safari (приложение «Файлы»)', 3400);
+        showToast('Отправлено в «Загрузки» Safari (приложение «Файлы»)', 3200);
       } else {
         showToast('Файл сохранён в «Загрузки»', 2800);
       }
@@ -274,11 +318,11 @@ export function createUIController({
 
     if (ios && shareable) {
       el.btnPreviewPrimary.textContent = isPhoto
-        ? 'Сохранить в «Фото» / Поделиться'
+        ? 'Сохранить в «Фото»'
         : 'Сохранить видео в «Фото»';
       el.previewHint.textContent = isPhoto
-        ? 'В меню iPhone нажмите «Сохранить изображение» — снимок попадёт прямо в галерею «Фото» (или удерживайте фото пальцем).'
-        : 'В меню iPhone нажмите «Сохранить видео» — ролик попадёт прямо в галерею «Фото».';
+        ? 'В меню iPhone выберите «Сохранить изображение» (или удерживайте фото пальцем).'
+        : 'В меню iPhone выберите «Сохранить видео» — ролик попадёт прямо в «Фото».';
       primaryAction = runShare;
 
       el.btnPreviewSecondary.textContent = 'В «Файлы»';
@@ -287,20 +331,19 @@ export function createUIController({
     } else if (ios && !shareable) {
       el.btnPreviewPrimary.textContent = 'Скачать файл';
       el.previewHint.textContent = isPhoto
-        ? 'Нажмите и удерживайте фото пальцем → «Сохранить в Фото», либо откройте эту ссылку в Safari.'
+        ? 'Удерживайте фото пальцем → «Сохранить в Фото», либо откройте ссылку в Safari.'
         : 'Чтобы сохранить видео прямо в «Фото», откройте эту ссылку в Safari.';
       primaryAction = runDownload;
 
       el.btnPreviewSecondary.classList.add('hidden');
       secondaryAction = null;
     } else {
-      // Android Chrome & Desktop: direct download lands in Android Gallery / Downloads in 1 tap!
       el.btnPreviewPrimary.textContent = android ? 'Сохранить в галерею' : 'Скачать файл';
       el.previewHint.textContent = android
         ? isPhoto
-          ? 'Снимок сохранится в телефон и сразу появится в Галерее / Google Фото.'
-          : 'Видео сохранится в телефон и сразу появится в Галерее / Google Фото.'
-        : 'Файл сохранится в папку «Загрузки» на компьютере.';
+          ? 'Снимок сразу появится в Галерее и Google Фото.'
+          : 'Видео сразу появится в Галерее и Google Фото.'
+        : 'Файл сохранится в папку «Загрузки».';
       primaryAction = runDownload;
 
       if (shareable) {
@@ -314,6 +357,7 @@ export function createUIController({
     }
 
     el.previewModal.classList.remove('hidden');
+    document.body.classList.add('is-preview-open');
     syncCaptureDockVisibility();
   }
 
@@ -373,7 +417,6 @@ export function createUIController({
       return;
     }
 
-    // Video mode: tap to start, tap again to stop
     if (!isRecording) {
       if (navigator.vibrate) {
         try {
@@ -398,13 +441,9 @@ export function createUIController({
     }
   });
 
-  // Preview modal actions (must run directly inside click handler for iOS navigator.share!)
-  el.btnPreviewPrimary.addEventListener('click', () => {
-    primaryAction?.();
-  });
-  el.btnPreviewSecondary.addEventListener('click', () => {
-    secondaryAction?.();
-  });
+  // Preview modal actions (called directly in click handler for iOS Web Share gesture)
+  el.btnPreviewPrimary.addEventListener('click', () => primaryAction?.());
+  el.btnPreviewSecondary.addEventListener('click', () => secondaryAction?.());
   el.btnPreviewClose.addEventListener('click', closeMediaPreview);
   el.btnPreviewRetake.addEventListener('click', closeMediaPreview);
   document.addEventListener('keydown', (e) => {
@@ -464,10 +503,10 @@ export function createUIController({
     });
   });
 
-  // Action bar buttons
+  // Camera & Dev actions
   el.btnReset.addEventListener('click', () => {
     onReset?.();
-    showToast('Позиция сброшена — наведи на табличку или нажми «Сюда»');
+    showToast('Позиция сброшена — наведите на табличку или нажмите «Рядом»');
   });
 
   el.btnPlaceHere.addEventListener('click', () => {
@@ -477,8 +516,8 @@ export function createUIController({
     } else if (res && res.ok) {
       showToast(
         res.isSlamReady
-          ? 'Шурале поставлен сюда (статичный рост 1,6 м)'
-          : 'SLAM ещё калибруется — поведите телефоном 1–2 сек и нажмите «Сюда» снова',
+          ? 'Шурале поставлен рядом'
+          : 'Поведите телефоном пару секунд и нажмите «Рядом» ещё раз',
         2600,
       );
     }
@@ -490,12 +529,6 @@ export function createUIController({
       showToast(res.reason, 3600);
     }
   });
-
-  const setDrawerOpen = (open) => {
-    el.settingsDrawer.classList.toggle('hidden', !open);
-    el.btnSettings.setAttribute('aria-pressed', String(open));
-    syncCaptureDockVisibility();
-  };
 
   el.btnSettings.addEventListener('click', () => {
     const isClosed = el.settingsDrawer.classList.contains('hidden');
@@ -523,7 +556,8 @@ export function createUIController({
   });
 
   el.btnTelemetry.addEventListener('click', () => {
-    el.telemetryBox.classList.toggle('hidden');
+    const nowHidden = el.telemetryBox.classList.toggle('hidden');
+    el.btnTelemetry.setAttribute('aria-pressed', String(!nowHidden));
   });
 
   el.btnLicense.addEventListener('click', () => {
@@ -558,8 +592,8 @@ export function createUIController({
       if (el.scanLabel) {
         el.scanLabel.textContent =
           mode === 'calibrating'
-            ? 'Плавно поведите телефоном влево-вправо (~40 см) для калибровки метров'
-            : 'SLAM готов (1:1 м) — наведите на табличку или на пол → «📍 Сюда»';
+            ? 'Плавно поведите телефоном вбок'
+            : 'Наведите на табличку или нажмите «Рядом»';
       }
     },
     setDirectionHint(text) {
@@ -572,7 +606,7 @@ export function createUIController({
     },
     setTorchState({ isOn }) {
       el.btnTorch.setAttribute('aria-pressed', String(Boolean(isOn)));
-      el.torchLabel.textContent = isOn ? 'Свет ВКЛ' : 'Свет';
+      el.torchLabel.textContent = isOn ? 'Свет вкл' : 'Свет';
     },
     updateTelemetry(info) {
       if (el.telemetryBox.classList.contains('hidden')) return;

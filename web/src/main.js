@@ -261,7 +261,7 @@ function launchXR8({ disableWorldTracking }) {
   });
 
   if (disableWorldTracking) {
-    ui.setStatus('searching', 'Упрощённый режим — наведите камеру на табличку А4');
+    ui.setStatus('searching', 'Наведите камеру на табличку А4');
   }
 }
 
@@ -269,12 +269,13 @@ async function startARSession() {
   if (!cachedXR8 || !cachedTargetData) return;
 
   btnStartAr.disabled = true;
-  btnStartAr.textContent = 'Запуск камеры...';
+  btnStartAr.textContent = 'Открываем камеру...';
 
   const motion = await requestIOSMotionPermissions();
 
   startOverlay.classList.add('hidden');
-  ui.setStatus('loading', 'Запуск камеры и AR...');
+  document.body.classList.remove('is-welcome-open');
+  ui.setStatus('loading', 'Включаем камеру...');
 
   try {
     if (!motion.granted) {
@@ -297,6 +298,7 @@ async function startARSession() {
 async function preload() {
   if (!window.isSecureContext) {
     startOverlay.classList.add('hidden');
+    document.body.classList.remove('is-welcome-open');
     ui.setStatus('error', 'Требуется HTTPS');
     ui.showError(
       'Нужен HTTPS для доступа к камере',
@@ -308,6 +310,7 @@ async function preload() {
   const inApp = detectInAppBrowser();
   if (inApp) {
     startOverlay.classList.add('hidden');
+    document.body.classList.remove('is-welcome-open');
     ui.setStatus('error', `Откройте в Safari / Chrome`);
     ui.showError(
       `Открыто внутри ${inApp}`,
@@ -316,20 +319,21 @@ async function preload() {
     return;
   }
 
-  ui.setStatus('loading', 'Загрузка движка SLAM и маркера...');
+  ui.setStatus('loading', 'Готовим камеру...');
 
   try {
     const [XR8, targetData] = await Promise.all([waitForXR8(), fetchImageTarget()]);
     cachedXR8 = XR8;
     cachedTargetData = targetData;
 
-    ui.setStatus('searching', 'Готово к запуску');
+    ui.setStatus('searching', 'Можно начинать');
     btnStartAr.disabled = false;
-    btnStartAr.textContent = 'Запустить AR-камеру';
+    btnStartAr.textContent = 'Открыть камеру';
     btnStartAr.addEventListener('click', startARSession, { once: true });
   } catch (err) {
     console.error('Preload error:', err);
     startOverlay.classList.add('hidden');
+    document.body.classList.remove('is-welcome-open');
     ui.setStatus('error', 'Ошибка загрузки');
     ui.showError('Ошибка загрузки ресурсов', formatErrorDetail(err));
   }

@@ -7,7 +7,7 @@
     content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover"
   />
   <meta name="apple-mobile-web-app-capable" content="yes" />
-  <meta name="theme-color" content="#0f1a2b" />
+  <meta name="theme-color" content="#0e182a" />
   <title>Шурале AR — Кышкы Әкият (Иннополис)</title>
 
   <!--
@@ -17,21 +17,32 @@
   -->
   <script src="./external/xr/xr.js" async data-preload-chunks="slam"></script>
 </head>
-<body>
+<body class="is-welcome-open">
   <canvas id="camerafeed"></canvas>
 
-  <!-- Subtle camera shutter flash overlay -->
+  <!-- Camera shutter flash overlay -->
   <div id="shutter-flash" class="shutter-flash" aria-hidden="true"></div>
 
-  <!-- Top HUD -->
+  <!-- Top HUD: single centered friendly status pill (triple-tap opens hidden test bar) -->
   <header class="hud-top">
-    <div id="status-pill" class="status-pill status-loading">
+    <button
+      id="status-pill"
+      class="status-pill status-loading"
+      type="button"
+      aria-live="polite"
+      title="Тройной тап открывает панель настройки"
+    >
       <span id="status-dot" class="status-dot"></span>
-      <span id="status-text">Загрузка AR-движка...</span>
-    </div>
-    <button id="btn-telemetry" class="icon-chip" type="button" aria-label="Телеметрия" title="Показать/скрыть телеметрию">
-      INFO
+      <span id="status-text">Готовим камеру...</span>
     </button>
+
+    <!-- Hidden Developer / Field-Calibration Bar (revealed via 3x tap on status pill or ?dev=1) -->
+    <div id="dev-toolbar" class="dev-toolbar hidden" role="toolbar" aria-label="Панель настройки">
+      <button id="btn-reset" class="dev-chip" type="button">↺ Сброс</button>
+      <button id="btn-settings" class="dev-chip" type="button" aria-pressed="false">⚙ Настр.</button>
+      <button id="btn-telemetry" class="dev-chip" type="button" aria-pressed="false">INFO</button>
+      <button id="btn-close-dev" class="dev-chip dev-chip-close" type="button" aria-label="Скрыть панель">✕</button>
+    </div>
   </header>
 
   <!-- Active video recording timer pill (visible only while recording) -->
@@ -41,6 +52,7 @@
     <span class="rec-limit">/ 00:30</span>
   </div>
 
+  <!-- Telemetry readout (only inside hidden dev mode) -->
   <div id="telemetry-box" class="telemetry-box hidden">
     <div id="telemetry-lines">Инициализация...</div>
   </div>
@@ -48,7 +60,7 @@
   <!-- Subtle off-screen direction hint when Shurale is anchored outside current view -->
   <div id="direction-hint" class="direction-hint hidden"></div>
 
-  <!-- Center subtle scan prompt (hidden once anchored) -->
+  <!-- Center scan prompt (hidden once anchored) -->
   <div id="scan-hint" class="scan-hint hidden">
     <div class="scan-frame">
       <span class="corner tl"></span>
@@ -56,23 +68,52 @@
       <span class="corner bl"></span>
       <span class="corner br"></span>
     </div>
-    <div id="scan-label" class="scan-label">Поведите телефоном вбок (~40 см) для калибровки метров</div>
+    <div id="scan-label" class="scan-label">Плавно поведите телефоном вбок</div>
   </div>
 
-  <!-- Start overlay (ensures valid iOS Safari user gesture for Camera + IMU Motion sensors) -->
-  <div id="start-overlay" class="modal-overlay">
-    <div class="modal-card start-card">
-      <div class="badge-chip">Кышкы Әкият • Иннополис</div>
-      <h2>Шурале AR — фото и видео</h2>
-      <p>
-        Наведите камеру на матовую табличку А4 или на пол — Шурале встанет ногами на землю. Обходите его на 360°, снимайте фото и видео и сохраняйте в галерею.
-      </p>
+  <!-- Welcome bottom sheet (valid iOS Safari user gesture for Camera + IMU sensors) -->
+  <div id="start-overlay" class="sheet-overlay">
+    <div class="welcome-card">
+      <!-- Quiet folk-cut eight-point star motif echoing the printed A4 sign -->
+      <svg class="folk-star" viewBox="0 0 44 44" fill="none" aria-hidden="true">
+        <polygon
+          points="22,2 26,16 40,20 26,24 22,38 18,24 4,20 18,16"
+          fill="#E09F2D"
+          stroke="#0E182A"
+          stroke-width="1.6"
+        />
+        <circle cx="22" cy="20" r="3.6" fill="#C9382B" />
+      </svg>
+
+      <div class="welcome-copy">
+        <h1>Встреть Шурале вживую</h1>
+        <p>
+          Наведи камеру на табличку «Кышкы Әкият» или на снег рядом — он встанет в полный рост. Можно обойти вокруг и снять фото или видео.
+        </p>
+      </div>
+
+      <div class="welcome-highlights">
+        <span class="highlight-item">
+          <span class="hl-dot hl-pine"></span>
+          360° обход
+        </span>
+        <span class="highlight-item">
+          <span class="hl-dot hl-red"></span>
+          Фото и видео
+        </span>
+        <span class="highlight-item">
+          <span class="hl-dot hl-ochre"></span>
+          В галерею
+        </span>
+      </div>
+
       <button id="btn-start-ar" class="btn-primary" type="button" disabled>
-        Загрузка движка SLAM...
+        Готовим камеру...
       </button>
+
       <p class="small-legal">
-        8th Wall XR Engine · Copyright © 2026 Niantic Spatial, Inc. ·
-        <a href="./external/xr/LICENSE" target="_blank" rel="noopener">Лицензия (AS IS)</a>
+        Иннополис, Кышкы Әкият · 8th Wall XR (Niantic Spatial, Inc.) ·
+        <a href="./external/xr/LICENSE" target="_blank" rel="noopener">Лицензия</a>
       </p>
     </div>
   </div>
@@ -80,13 +121,13 @@
   <!-- Error / HTTPS overlay -->
   <div id="error-overlay" class="modal-overlay hidden">
     <div class="modal-card">
-      <h2 id="error-title">Не удалось запустить камеру</h2>
+      <h2 id="error-title">Не удалось открыть камеру</h2>
       <p id="error-message"></p>
       <button id="btn-retry" class="btn-primary" type="button">Попробовать снова</button>
     </div>
   </div>
 
-  <!-- Calibration / Debug Drawer -->
+  <!-- Calibration / Debug Drawer (accessible from triple-tap dev bar) -->
   <section id="settings-drawer" class="settings-drawer hidden" aria-label="Настройка положения Шурале">
     <div class="drawer-header">
       <strong>Настройка Шурале (тест на месте)</strong>
@@ -189,7 +230,7 @@
     </div>
   </div>
 
-  <!-- Photo / Video Preview & Save-to-Gallery Modal -->
+  <!-- Winter Postcard Photo / Video Preview & Save-to-Gallery Modal -->
   <div
     id="capture-preview-modal"
     class="preview-modal hidden"
@@ -198,38 +239,44 @@
     aria-label="Просмотр и сохранение"
   >
     <div class="preview-topbar">
-      <span id="preview-meta" class="preview-meta">Фото • JPG</span>
+      <span id="preview-meta" class="preview-meta">Фото готово</span>
       <button id="btn-preview-close" class="preview-close-btn" type="button" aria-label="Закрыть">
         ✕
       </button>
     </div>
 
-    <div class="preview-stage">
-      <img id="preview-image" class="preview-media hidden" alt="Фото с Шурале" />
-      <video
-        id="preview-video"
-        class="preview-media hidden"
-        controls
-        playsinline
-        webkit-playsinline
-        autoplay
-        loop
-        muted
-      ></video>
+    <div class="preview-postcard">
+      <div class="preview-stage">
+        <img id="preview-image" class="preview-media hidden" alt="Фото с Шурале" />
+        <video
+          id="preview-video"
+          class="preview-media hidden"
+          controls
+          playsinline
+          webkit-playsinline
+          autoplay
+          loop
+          muted
+        ></video>
+      </div>
+      <div class="postcard-caption">
+        <span class="postcard-title">Шурале, Иннополис</span>
+        <span class="postcard-event">Кышкы Әкият</span>
+      </div>
     </div>
 
     <div class="preview-footer">
       <p id="preview-hint" class="preview-hint"></p>
       <div class="preview-actions">
-        <button id="btn-preview-primary" class="btn-preview-primary" type="button">
+        <button id="btn-preview-primary" class="btn-primary" type="button">
           Сохранить в галерею
         </button>
         <div class="preview-secondary-row">
-          <button id="btn-preview-secondary" class="btn-preview-secondary" type="button">
-            Поделиться
+          <button id="btn-preview-retake" class="btn-secondary" type="button">
+            Снять ещё
           </button>
-          <button id="btn-preview-retake" class="btn-preview-secondary" type="button">
-            Переснять
+          <button id="btn-preview-secondary" class="btn-secondary" type="button">
+            Поделиться
           </button>
         </div>
       </div>
@@ -239,7 +286,7 @@
   <!-- Toast notification -->
   <div id="toast" class="toast hidden"></div>
 
-  <!-- Camera Capture Dock (Photo / Video mode + shutter button) -->
+  <!-- Casual Camera Dock (Mode Pill + Place Here / Hero Shutter / Torch) -->
   <div id="capture-dock" class="capture-dock hidden" aria-label="Съёмка фото и видео">
     <div id="capture-mode-switch" class="mode-switch" role="tablist" aria-label="Режим съёмки">
       <button
@@ -262,39 +309,55 @@
       </button>
     </div>
 
-    <button
-      id="btn-shutter"
-      class="shutter-btn mode-photo"
-      type="button"
-      aria-label="Сделать фото"
-    >
-      <svg class="shutter-progress-ring" viewBox="0 0 76 76" aria-hidden="true">
-        <circle class="shutter-ring-track" cx="38" cy="38" r="35" />
-        <circle id="shutter-ring-bar" class="shutter-ring-bar" cx="38" cy="38" r="35" />
-      </svg>
-      <span class="shutter-inner"></span>
-    </button>
-  </div>
+    <div class="camera-row">
+      <!-- Place Shurale nearby -->
+      <div class="side-action">
+        <button
+          id="btn-place-here"
+          class="circle-btn"
+          type="button"
+          aria-label="Поставить Шурале рядом"
+        >
+          <svg class="circle-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M12 21s-6-5.2-6-10a6 6 0 1 1 12 0c0 4.8-6 10-6 10z" />
+            <circle cx="12" cy="11" r="2.2" fill="currentColor" />
+          </svg>
+        </button>
+        <span class="side-label">Рядом</span>
+      </div>
 
-  <!-- Bottom Action Bar -->
-  <nav class="hud-bottom" aria-label="Управление AR">
-    <button id="btn-reset" class="action-btn" type="button">
-      <span class="action-icon">↺</span>
-      <span>Сброс</span>
-    </button>
-    <button id="btn-place-here" class="action-btn action-btn-accent" type="button">
-      <span class="action-icon">📍</span>
-      <span>Сюда</span>
-    </button>
-    <button id="btn-torch" class="action-btn" type="button" aria-pressed="false">
-      <span class="action-icon">🔦</span>
-      <span id="torch-label">Свет</span>
-    </button>
-    <button id="btn-settings" class="action-btn" type="button" aria-pressed="false">
-      <span class="action-icon">⚙</span>
-      <span>Настр.</span>
-    </button>
-  </nav>
+      <!-- Hero tactile shutter button -->
+      <button
+        id="btn-shutter"
+        class="shutter-btn mode-photo"
+        type="button"
+        aria-label="Сделать фото"
+      >
+        <svg class="shutter-progress-ring" viewBox="0 0 80 80" aria-hidden="true">
+          <circle id="shutter-ring-bar" class="shutter-ring-bar" cx="40" cy="40" r="36" />
+        </svg>
+        <span class="shutter-inner"></span>
+      </button>
+
+      <!-- Rear flashlight / lantern -->
+      <div class="side-action">
+        <button
+          id="btn-torch"
+          class="circle-btn"
+          type="button"
+          aria-pressed="false"
+          aria-label="Фонарик"
+        >
+          <svg class="circle-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M9 18h6" />
+            <path d="M10 22h4" />
+            <path d="M12 2a6 6 0 0 0-3.5 10.9c.6.4 1 1.1 1 1.9V15h5v-.2c0-.8.4-1.5 1-1.9A6 6 0 0 0 12 2z" />
+          </svg>
+        </button>
+        <span id="torch-label" class="side-label">Свет</span>
+      </div>
+    </div>
+  </div>
 
   <script type="module" src="./src/main.js"></script>
 </body>
