@@ -8,13 +8,24 @@ window.THREE = THREE;
 const WORLD_UP = new THREE.Vector3(0, 1, 0);
 
 /**
- * Keeps #camerafeed full-viewport AND matches canvas pixel buffer (width/height)
- * to CSS viewport × DPR so 8th Wall camera feed renders crisp Retina HD with 1:1 aspect ratio.
+ * Keeps #camerafeed pixel buffer (width/height) synced to its real full-viewport CSS box × DPR
+ * so 8th Wall renders crisp Retina HD with 1:1 aspect ratio.
+ *
+ * CRITICAL for iOS Safari: XR8.Threejs internally calls renderer.setSize(canvasWidth, canvasHeight)
+ * with updateStyle=true, which stamps inline `style="width: 786px; height: 1704px"` (2x screen!)
+ * and triggers iOS Safari auto-zoom-out & dark borders. We let CSS `width: 100% !important; height: 100% !important`
+ * control display size and strip any inline pixel styles immediately.
  */
 export function syncCanvasBufferSize(canvas) {
   if (!canvas) return;
-  const w = window.innerWidth;
-  const h = window.innerHeight;
+  if (canvas.style.width) canvas.style.width = '';
+  if (canvas.style.height) canvas.style.height = '';
+
+  const rect = canvas.getBoundingClientRect();
+  const w = Math.round(rect.width || window.visualViewport?.width || window.innerWidth);
+  const h = Math.round(rect.height || window.visualViewport?.height || window.innerHeight);
+  if (w <= 0 || h <= 0) return;
+
   const dpr = Math.min(window.devicePixelRatio || 1, 2);
   const pw = Math.max(1, Math.round(w * dpr));
   const ph = Math.max(1, Math.round(h * dpr));
@@ -22,8 +33,6 @@ export function syncCanvasBufferSize(canvas) {
     canvas.width = pw;
     canvas.height = ph;
   }
-  canvas.style.width = `${w}px`;
-  canvas.style.height = `${h}px`;
 }
 
 export function createFullWindowCanvasModule() {
@@ -40,9 +49,15 @@ export function createFullWindowCanvasModule() {
       window.addEventListener('orientationchange', resize);
       window.visualViewport?.addEventListener('resize', resize);
     },
+    onCanvasSizeChange: resize,
     onVideoSizeChange: resize,
     onDeviceOrientationChange: resize,
     onUpdate: resize,
+    onRender: () => {
+      if (!canvas) return;
+      if (canvas.style.width) canvas.style.width = '';
+      if (canvas.style.height) canvas.style.height = '';
+    },
     onDetach: () => {
       window.removeEventListener('resize', resize);
       window.removeEventListener('orientationchange', resize);

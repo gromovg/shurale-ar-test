@@ -14,6 +14,77 @@ import { createUIController } from './ui.js';
 
 const settings = loadSettings();
 
+/**
+ * Locks the WebAR screen rigidly to the mobile phone's visible viewport:
+ * - Syncs --app-vw / --app-vh to visualViewport so HUD & camera stay edge-to-edge
+ *   even as iOS Safari's dynamic address bar expands/collapses.
+ * - Blocks accidental pinch-zoom, double-tap zoom, and elastic page bounce
+ *   while preserving scrolling inside #settings-drawer and welcome sheet.
+ */
+function lockMobileViewport() {
+  const syncViewportVars = () => {
+    if (window.scrollX !== 0 || window.scrollY !== 0) {
+      window.scrollTo(0, 0);
+    }
+    const vv = window.visualViewport;
+    const vw = Math.round(vv ? vv.width : window.innerWidth);
+    const vh = Math.round(vv ? vv.height : window.innerHeight);
+    if (vw > 0 && vh > 0) {
+      document.documentElement.style.setProperty('--app-vw', `${vw}px`);
+      document.documentElement.style.setProperty('--app-vh', `${vh}px`);
+    }
+    const canvas = document.getElementById('camerafeed');
+    if (canvas) syncCanvasBufferSize(canvas);
+  };
+
+  syncViewportVars();
+  window.addEventListener('resize', syncViewportVars, { passive: true });
+  window.addEventListener('orientationchange', () => setTimeout(syncViewportVars, 120), { passive: true });
+  window.visualViewport?.addEventListener('resize', syncViewportVars, { passive: true });
+  window.visualViewport?.addEventListener('scroll', syncViewportVars, { passive: true });
+
+  // Block iOS Safari proprietary pinch gestures (Safari ignores viewport user-scalable=no)
+  const blockGesture = (e) => e.preventDefault();
+  document.addEventListener('gesturestart', blockGesture, { passive: false });
+  document.addEventListener('gesturechange', blockGesture, { passive: false });
+  document.addEventListener('gestureend', blockGesture, { passive: false });
+
+  // Block multi-touch pinch zoom and rubber-band page drag outside scrollable drawers
+  document.addEventListener(
+    'touchmove',
+    (e) => {
+      if (e.touches.length > 1) {
+        e.preventDefault();
+        return;
+      }
+      if (!e.target.closest?.('#settings-drawer, .welcome-card, .modal-card')) {
+        e.preventDefault();
+      }
+    },
+    { passive: false },
+  );
+
+  // Block double-tap zoom on empty AR canvas areas without interfering with button taps
+  let lastTapTime = 0;
+  document.addEventListener(
+    'touchend',
+    (e) => {
+      const now = Date.now();
+      if (
+        now - lastTapTime <= 320 &&
+        e.touches.length === 0 &&
+        !e.target.closest?.('button, a, input, label, video, #settings-drawer')
+      ) {
+        e.preventDefault();
+      }
+      lastTapTime = now;
+    },
+    { passive: false },
+  );
+}
+
+lockMobileViewport();
+
 let arController = null;
 let torchModule = null;
 let captureController = null;
