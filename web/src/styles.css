@@ -272,24 +272,28 @@ label {
   pointer-events: none;
 }
 
-/* Scan frame hint */
+/* Scan frame hint (Stage 3) */
 .scan-hint {
   position: fixed;
-  inset: 0;
-  z-index: 10;
+  top: 0;
+  left: 0;
+  width: var(--app-vw, 100%);
+  height: var(--app-vh, 100dvh);
+  z-index: 12;
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
   gap: 16px;
   pointer-events: none;
-  padding: 24px 24px 160px;
+  padding: 24px 24px 120px;
 }
 
 .scan-frame {
   position: relative;
   width: min(52vw, 200px);
   aspect-ratio: 3 / 4;
+  transition: transform 0.2s ease;
 }
 
 .scan-frame .corner {
@@ -298,6 +302,15 @@ label {
   height: 28px;
   border: 3.5px solid var(--ka-paper);
   filter: drop-shadow(0 2px 3px rgba(14, 24, 42, 0.6));
+  transition: border-color 0.18s ease;
+}
+
+.scan-frame.is-matched {
+  transform: scale(1.04);
+}
+
+.scan-frame.is-matched .corner {
+  border-color: #22c55e;
 }
 
 .scan-frame .tl { top: 0; left: 0; border-right: none; border-bottom: none; border-radius: 8px 0 0 0; }
@@ -317,6 +330,210 @@ label {
   text-align: center;
   max-width: 280px;
   line-height: 1.35;
+}
+
+/* Stage 2: Interactive horizontal pan calibration coach */
+.calib-coach {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: var(--app-vw, 100%);
+  height: var(--app-vh, 100dvh);
+  z-index: 15;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  pointer-events: none;
+}
+
+.calib-card {
+  width: min(86vw, 310px);
+  padding: 18px 18px 16px;
+  border-radius: 24px;
+  background: rgba(247, 246, 242, 0.94);
+  color: var(--ka-ink);
+  border: 2px solid var(--ka-ink);
+  box-shadow: 0 5px 0 var(--ka-ink);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+}
+
+.calib-anim-stage {
+  position: relative;
+  width: 220px;
+  height: 74px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.calib-track-svg {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+
+.calib-phone-mover {
+  position: relative;
+  z-index: 2;
+  animation: slowPanPhone 3.2s ease-in-out infinite;
+}
+
+.calib-phone-svg {
+  width: 36px;
+  height: 56px;
+  display: block;
+  filter: drop-shadow(0 3px 0 rgba(14, 24, 42, 0.2));
+}
+
+@keyframes slowPanPhone {
+  0%, 100% {
+    transform: translateX(-56px) rotate(-6deg);
+  }
+  50% {
+    transform: translateX(56px) rotate(6deg);
+  }
+}
+
+.calib-title {
+  font-size: clamp(13.5px, 3.8vw, 15px);
+  font-weight: 800;
+  letter-spacing: -0.015em;
+  text-align: center;
+  line-height: 1.25;
+  color: var(--ka-ink);
+}
+
+.calib-title.is-warn {
+  color: var(--ka-red);
+}
+
+.calib-bar-row {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+}
+
+.calib-bar-track {
+  flex: 1;
+  height: 12px;
+  border-radius: 999px;
+  background: var(--ka-paper-soft);
+  border: 2px solid var(--ka-ink);
+  overflow: hidden;
+  padding: 1px;
+}
+
+.calib-bar-fill {
+  width: 0%;
+  height: 100%;
+  border-radius: 999px;
+  background: var(--ka-ochre);
+  transition: width 90ms linear, background-color 200ms ease;
+}
+
+.calib-bar-fill.is-ready {
+  background: var(--ka-pine);
+}
+
+.calib-bar-fill.is-fast {
+  background: var(--ka-red);
+}
+
+.calib-percent {
+  min-width: 34px;
+  text-align: right;
+  font-size: 12px;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+  color: var(--ka-ink);
+}
+
+.calib-percent.is-done {
+  color: var(--ka-pine);
+  font-size: 14px;
+}
+
+/* Stage 3 bottom-right single Torch button */
+.scan-torch-dock {
+  position: fixed;
+  right: max(22px, env(safe-area-inset-right));
+  bottom: max(22px, env(safe-area-inset-bottom));
+  z-index: 26;
+}
+
+/* Stage 4: Single prominent "Поставить" hero CTA */
+.place-stage-dock {
+  position: fixed;
+  left: 0;
+  width: var(--app-vw, 100%);
+  bottom: max(24px, env(safe-area-inset-bottom));
+  z-index: 26;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  padding: 0 20px;
+  pointer-events: none;
+}
+
+.place-hero-btn {
+  pointer-events: auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  min-width: min(72vw, 240px);
+  padding: 14px 26px;
+  border-radius: 999px;
+  border: 2.5px solid var(--ka-ink);
+  background: var(--ka-red);
+  color: var(--ka-red-text);
+  box-shadow: 0 5px 0 var(--ka-ink);
+  font-size: clamp(16px, 4.4vw, 18px);
+  font-weight: 800;
+  letter-spacing: -0.015em;
+  cursor: pointer;
+  transition: transform 90ms ease, box-shadow 90ms ease;
+}
+
+.place-hero-btn:active {
+  transform: translateY(3px);
+  box-shadow: 0 2px 0 var(--ka-ink);
+}
+
+.place-hero-icon {
+  width: 28px;
+  height: 28px;
+  flex-shrink: 0;
+}
+
+.btn-cancel-pill {
+  pointer-events: auto;
+  padding: 7px 18px;
+  border-radius: 999px;
+  border: 2px solid var(--ka-ink);
+  background: var(--ka-paper);
+  color: var(--ka-ink);
+  box-shadow: 0 3px 0 var(--ka-ink);
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.btn-cancel-pill:active {
+  transform: translateY(2px);
+  box-shadow: 0 1px 0 var(--ka-ink);
+}
+
+.invisible-slot {
+  visibility: hidden !important;
+  pointer-events: none !important;
 }
 
 /* Bottom Welcome Sheet (Start Screen) */
@@ -652,9 +869,15 @@ body.is-recording .telemetry-box,
 body.is-recording .mode-switch,
 body.is-recording .side-action,
 body.is-welcome-open .hud-top,
+body.is-welcome-open .calib-coach,
 body.is-welcome-open .scan-hint,
+body.is-welcome-open .scan-torch-dock,
+body.is-welcome-open .place-stage-dock,
 body.is-preview-open .hud-top,
+body.is-preview-open .calib-coach,
 body.is-preview-open .scan-hint,
+body.is-preview-open .scan-torch-dock,
+body.is-preview-open .place-stage-dock,
 body.is-preview-open .direction-hint,
 body.is-preview-open .telemetry-box {
   opacity: 0 !important;

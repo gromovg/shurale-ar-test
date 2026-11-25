@@ -101,7 +101,10 @@ const ui = createUIController({
   videoSupported: isVideoRecordingSupported(),
   onSettingsChanged: () => arController?.applySettingsLive(),
   onReset: () => arController?.resetAnchor(),
+  onDevSkip: () => arController?.devSkipToPlace(),
   onPlaceHere: () => arController?.placeHere(),
+  onStartRelocate: () => arController?.startRelocate(),
+  onCancelRelocate: () => arController?.cancelRelocate(),
   onToggleTorch: () => torchModule?.toggle(),
   onTakePhoto: async () => {
     if (!captureController) {
@@ -242,6 +245,8 @@ function launchXR8({ disableWorldTracking }) {
   arController = createShuralePipeline({
     getSettings: () => settings,
     imageOnly: disableWorldTracking,
+    onStageChange: (stage, meta) => ui.setStage(stage, meta),
+    onCalibrationProgress: (info) => ui.setCalibrationProgress(info),
     onStatusChange: (mode, text) => ui.setStatus(mode, text),
     onDirectionHint: (text) => ui.setDirectionHint(text),
     onTelemetry: (info) => ui.updateTelemetry(info),

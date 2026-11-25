@@ -23,7 +23,10 @@ export function createUIController({
   videoSupported = true,
   onSettingsChanged,
   onReset,
+  onDevSkip,
   onPlaceHere,
+  onStartRelocate,
+  onCancelRelocate,
   onToggleTorch,
   onTakePhoto,
   onStartVideo,
@@ -35,13 +38,31 @@ export function createUIController({
     statusText: document.getElementById('status-text'),
     devToolbar: document.getElementById('dev-toolbar'),
     btnCloseDev: document.getElementById('btn-close-dev'),
+    btnDevSkip: document.getElementById('btn-dev-skip'),
+
+    calibCoach: document.getElementById('calibration-coach'),
+    calibTitle: document.getElementById('calib-title'),
+    calibBarFill: document.getElementById('calib-bar-fill'),
+    calibPercent: document.getElementById('calib-percent'),
+
     scanHint: document.getElementById('scan-hint'),
+    scanFrame: document.getElementById('scan-frame'),
     scanLabel: document.getElementById('scan-label'),
+    scanTorchDock: document.getElementById('scan-torch-dock'),
+    btnScanTorch: document.getElementById('btn-scan-torch'),
+    scanTorchLabel: document.getElementById('scan-torch-label'),
+
+    placeStageDock: document.getElementById('place-stage-dock'),
+    btnPlacePrimary: document.getElementById('btn-place-primary'),
+    btnCancelRelocate: document.getElementById('btn-cancel-relocate'),
+
     directionHint: document.getElementById('direction-hint'),
     shutterFlash: document.getElementById('shutter-flash'),
     recIndicator: document.getElementById('rec-indicator'),
     recTimer: document.getElementById('rec-timer'),
     captureDock: document.getElementById('capture-dock'),
+    relocateWrap: document.getElementById('relocate-wrap'),
+    btnRelocate: document.getElementById('btn-relocate'),
     btnModePhoto: document.getElementById('btn-mode-photo'),
     btnModeVideo: document.getElementById('btn-mode-video'),
     btnShutter: document.getElementById('btn-shutter'),
@@ -63,7 +84,6 @@ export function createUIController({
     telemetryBox: document.getElementById('telemetry-box'),
     telemetryLines: document.getElementById('telemetry-lines'),
     btnReset: document.getElementById('btn-reset'),
-    btnPlaceHere: document.getElementById('btn-place-here'),
     btnTorch: document.getElementById('btn-torch'),
     torchLabel: document.getElementById('torch-label'),
     btnSettings: document.getElementById('btn-settings'),
@@ -95,6 +115,8 @@ export function createUIController({
   };
 
   let toastTimer = null;
+  let currentStage = 'loading'; // 'loading' | 'calibrating' | 'scanning' | 'ready_to_place' | 'placed'
+  let stageMeta = {};
   let captureAvailable = false;
   let captureMode = 'photo'; // 'photo' | 'video'
   let isRecording = false;
@@ -125,10 +147,85 @@ export function createUIController({
     }, durationMs);
   }
 
+  function syncStageVisibility() {
+    const drawerOpen = !el.settingsDrawer.classList.contains('hidden');
+    const previewOpen = !el.previewModal.classList.contains('hidden');
+    const overlayBlocking = drawerOpen || previewOpen;
+
+    el.calibCoach.classList.toggle('hidden', currentStage !== 'calibrating' || overlayBlocking);
+    el.scanHint.classList.toggle('hidden', currentStage !== 'scanning' || overlayBlocking);
+    el.scanTorchDock.classList.toggle(
+      'hidden',
+      currentStage !== 'scanning' || !captureAvailable || overlayBlocking,
+    );
+    el.placeStageDock.classList.toggle(
+      'hidden',
+      currentStage !== 'ready_to_place' || !captureAvailable || overlayBlocking,
+    );
+    el.captureDock.classList.toggle(
+      'hidden',
+      currentStage !== 'placed' || !captureAvailable || overlayBlocking,
+    );
+
+    // Show "Отмена" only when user clicked "Переставить" on an already placed Shurale
+    el.btnCancelRelocate.classList.toggle('hidden', !stageMeta.isRelocating);
+
+    // Hide "Переставить" in image-only fallback mode (no SLAM floor)
+    if (el.relocateWrap) {
+      const canRelocate = stageMeta.canRelocate !== false && !stageMeta.imageOnly;
+      el.relocateWrap.classList.toggle('invisible-slot', !canRelocate);
+    }
+
+    // Highlight scan frame when plaque matched!
+    if (el.scanFrame) {
+      el.scanFrame.classList.toggle('is-matched', Boolean(stageMeta.plaqueMatched));
+    }
+    if (el.scanLabel) {
+      el.scanLabel.textContent = stageMeta.plaqueMatched
+        ? 'Табличка найдена! ✓'
+        : 'Наведите рамку на табличку А4';
+    }
+  }
+
+  function setStage(stage, meta = {}) {
+    currentStage = stage;
+    stageMeta = { ...meta };
+    syncStageVisibility();
+  }
+
+  function setCalibrationProgress({ progress = 0, tooFast = false, done = false }) {
+    const pct = Math.max(0, Math.min(100, Math.round(progress * 100)));
+    if (el.calibBarFill) {
+      el.calibBarFill.style.width = `${pct}%`;
+      el.calibBarFill.classList.toggle('is-ready', pct >= 80 || done);
+      el.calibBarFill.classList.toggle('is-fast', Boolean(tooFast && !done));
+    }
+    const barTrack = el.calibBarFill?.parentElement;
+    if (barTrack) {
+      barTrack.setAttribute('aria-valuenow', String(pct));
+    }
+    if (el.calibPercent) {
+      el.calibPercent.textContent = done ? '✓' : `${pct}%`;
+      el.calibPercent.classList.toggle('is-done', Boolean(done));
+    }
+    if (el.calibTitle) {
+      if (done) {
+        el.calibTitle.textContent = 'Готово! Теперь сканируем табличку';
+      } else if (tooFast) {
+        el.calibTitle.textContent = 'Чуть медленнее — плавно вбок';
+      } else if (pct >= 82) {
+        el.calibTitle.textContent = 'Почти готово — ещё чуть-чуть вбок';
+      } else {
+        el.calibTitle.textContent = 'Медленно ведите телефон вбок';
+      }
+      el.calibTitle.classList.toggle('is-warn', Boolean(tooFast && !done));
+    }
+  }
+
   function setDrawerOpen(open) {
     el.settingsDrawer.classList.toggle('hidden', !open);
     el.btnSettings.setAttribute('aria-pressed', String(open));
-    syncCaptureDockVisibility();
+    syncStageVisibility();
   }
 
   function setDevBarOpen(open) {
@@ -141,7 +238,6 @@ export function createUIController({
     }
   }
 
-  // Reveal dev bar automatically if ?dev=1 is in URL
   if (devBarOpen) {
     el.devToolbar.classList.remove('hidden');
   }
@@ -161,6 +257,10 @@ export function createUIController({
   });
 
   el.btnCloseDev.addEventListener('click', () => setDevBarOpen(false));
+  el.btnDevSkip.addEventListener('click', () => {
+    onDevSkip?.();
+    showToast('Режим теста: табличка пропущена', 2000);
+  });
 
   function triggerShutterFlash() {
     el.shutterFlash.classList.remove('flash-active');
@@ -173,13 +273,6 @@ export function createUIController({
         // ignore
       }
     }
-  }
-
-  function syncCaptureDockVisibility() {
-    const drawerOpen = !el.settingsDrawer.classList.contains('hidden');
-    const previewOpen = !el.previewModal.classList.contains('hidden');
-    const shouldShow = captureAvailable && !drawerOpen && !previewOpen;
-    el.captureDock.classList.toggle('hidden', !shouldShow);
   }
 
   function updateShutterAppearance() {
@@ -255,7 +348,7 @@ export function createUIController({
     activeMedia = null;
     primaryAction = null;
     secondaryAction = null;
-    syncCaptureDockVisibility();
+    syncStageVisibility();
   }
 
   function showMediaPreview(media) {
@@ -358,7 +451,7 @@ export function createUIController({
 
     el.previewModal.classList.remove('hidden');
     document.body.classList.add('is-preview-open');
-    syncCaptureDockVisibility();
+    syncStageVisibility();
   }
 
   function formatSignedMeters(v) {
@@ -392,6 +485,32 @@ export function createUIController({
     syncInputsFromSettings();
     onSettingsChanged?.();
   }
+
+  // Stage 4 primary placement & Stage 5 relocation controls
+  el.btnPlacePrimary.addEventListener('click', () => {
+    if (navigator.vibrate) {
+      try {
+        navigator.vibrate(22);
+      } catch {
+        // ignore
+      }
+    }
+    const res = onPlaceHere?.();
+    if (res && !res.ok && res.reason) {
+      showToast(res.reason);
+    }
+  });
+
+  el.btnCancelRelocate.addEventListener('click', () => {
+    onCancelRelocate?.();
+  });
+
+  el.btnRelocate.addEventListener('click', () => {
+    const res = onStartRelocate?.();
+    if (res && !res.ok && res.reason) {
+      showToast(res.reason, 2800);
+    }
+  });
 
   // Camera capture controls
   el.btnModePhoto.addEventListener('click', () => setCaptureMode('photo'));
@@ -503,31 +622,19 @@ export function createUIController({
     });
   });
 
-  // Camera & Dev actions
-  el.btnReset.addEventListener('click', () => {
-    onReset?.();
-    showToast('Позиция сброшена — наведите на табличку или нажмите «Поставить»');
-  });
-
-  el.btnPlaceHere.addEventListener('click', () => {
-    const res = onPlaceHere?.();
-    if (res && !res.ok && res.reason) {
-      showToast(res.reason);
-    } else if (res && res.ok) {
-      showToast(
-        res.isSlamReady
-          ? 'Шурале поставлен сюда'
-          : 'Поведите телефоном пару секунд и нажмите «Поставить» ещё раз',
-        2600,
-      );
-    }
-  });
-
-  el.btnTorch.addEventListener('click', async () => {
+  // Torch toggles (both on Stage 3 scan screen and Stage 5 camera dock)
+  const handleTorchClick = async () => {
     const res = await onToggleTorch?.();
     if (res && !res.ok && res.reason) {
       showToast(res.reason, 3600);
     }
+  };
+  el.btnTorch.addEventListener('click', handleTorchClick);
+  el.btnScanTorch.addEventListener('click', handleTorchClick);
+
+  el.btnReset.addEventListener('click', () => {
+    onReset?.();
+    showToast('Сброшено — начнём заново с калибровки');
   });
 
   el.btnSettings.addEventListener('click', () => {
@@ -574,12 +681,15 @@ export function createUIController({
 
   syncInputsFromSettings();
   updateShutterAppearance();
+  syncStageVisibility();
 
   return {
     setCaptureAvailable(available) {
       captureAvailable = Boolean(available);
-      syncCaptureDockVisibility();
+      syncStageVisibility();
     },
+    setStage,
+    setCalibrationProgress,
     setRecordingState,
     setRecordingProgress,
     showMediaPreview,
@@ -587,14 +697,6 @@ export function createUIController({
       const cssMode = mode === 'calibrating' ? 'loading' : mode;
       el.statusPill.className = `status-pill status-${cssMode}`;
       el.statusText.textContent = text;
-      const showHint = mode === 'searching' || mode === 'calibrating';
-      el.scanHint.classList.toggle('hidden', !showHint);
-      if (el.scanLabel) {
-        el.scanLabel.textContent =
-          mode === 'calibrating'
-            ? 'Плавно поведите телефоном вбок'
-            : 'Наведите на табличку или нажмите «Поставить»';
-      }
     },
     setDirectionHint(text) {
       if (!text) {
@@ -605,8 +707,12 @@ export function createUIController({
       }
     },
     setTorchState({ isOn }) {
-      el.btnTorch.setAttribute('aria-pressed', String(Boolean(isOn)));
-      el.torchLabel.textContent = isOn ? 'Свет вкл' : 'Свет';
+      const pressed = String(Boolean(isOn));
+      const label = isOn ? 'Свет вкл' : 'Свет';
+      el.btnTorch.setAttribute('aria-pressed', pressed);
+      el.torchLabel.textContent = label;
+      el.btnScanTorch.setAttribute('aria-pressed', pressed);
+      el.scanTorchLabel.textContent = label;
     },
     updateTelemetry(info) {
       if (el.telemetryBox.classList.contains('hidden')) return;
@@ -618,17 +724,12 @@ export function createUIController({
           ? `${info.targetScale.toFixed(3)} (к-т ${info.unitsPerMeter.toFixed(2)}x)`
           : '—';
       const distStr = info.camDistM != null ? `${info.camDistM.toFixed(2)} м` : '—';
-      const stateStr = info.isLocked
-        ? 'HARD LOCK (SLAM)'
-        : info.isTargetVisible
-          ? `CALIBRATING (${info.sampleCount}/10)`
-          : 'SEARCHING';
       const camYStr = info.camY != null ? `${info.camY.toFixed(2)} м` : '—';
       const shScaleStr = info.shuraleScale != null ? `${info.shuraleScale.toFixed(2)}x` : '1.00x';
       el.telemetryLines.textContent = [
-        `Режим: ${stateStr} | SLAM: ${info.trackingStatus} | FPS: ${info.fps}`,
-        `До Шурале: ${distStr} | Масштаб модели: ${shScaleStr} | CamY: ${camYStr}`,
-        `GLB: ${modelStr} | Target scale: ${scaleStr}`,
+        `Этап: ${info.stage} | SLAM: ${info.trackingStatus} | FPS: ${info.fps}`,
+        `До Шурале: ${distStr} | Масштаб: ${shScaleStr} | CamY: ${camYStr}`,
+        `GLB: ${modelStr} | Табличка: ${info.plaqueUnlocked ? 'OK' : 'ждём'} | Scale: ${scaleStr}`,
       ].join('\n');
     },
     showError(title, message) {

@@ -146,22 +146,75 @@ function createContactShadowTexture() {
 }
 
 /**
- * Main WebAR scene pipeline:
- * - Image Target lock (`reality.imagefound`) -> hands off Shurale into SLAM world space
- * - Persistent SLAM hold on `reality.imagelost` so user can walk 360° around Shurale
- * - Gentle smooth re-alignment on `reality.imageupdated` when looking back at plaque
- * - Shadow catcher + AO contact shadow at Y = 0
- * - Live recalibration when sliders change in Settings drawer
+ * Builds a high-visibility Kyshky Akiyat floor target ring (ink outline + snow ring + crimson dot)
+ * that remains clearly legible on both bright snow and indoor floors.
+ */
+function createFloorReticle() {
+  const group = new THREE.Group();
+
+  const outerGeo = new THREE.RingGeometry(0.24, 0.28, 48);
+  outerGeo.rotateX(-Math.PI / 2);
+  const outerMat = new THREE.MeshBasicMaterial({
+    color: 0x0e182a,
+    transparent: true,
+    opacity: 0.88,
+    side: THREE.DoubleSide,
+    depthWrite: false,
+  });
+  group.add(new THREE.Mesh(outerGeo, outerMat));
+
+  const mainGeo = new THREE.RingGeometry(0.18, 0.24, 48);
+  mainGeo.rotateX(-Math.PI / 2);
+  const mainMat = new THREE.MeshBasicMaterial({
+    color: 0xf7f6f2,
+    transparent: true,
+    opacity: 0.96,
+    side: THREE.DoubleSide,
+    depthWrite: false,
+  });
+  group.add(new THREE.Mesh(mainGeo, mainMat));
+
+  const innerGeo = new THREE.CircleGeometry(0.055, 32);
+  innerGeo.rotateX(-Math.PI / 2);
+  const innerMat = new THREE.MeshBasicMaterial({
+    color: 0xc9382b,
+    transparent: true,
+    opacity: 0.95,
+    side: THREE.DoubleSide,
+    depthWrite: false,
+  });
+  const innerDot = new THREE.Mesh(innerGeo, innerMat);
+  innerDot.position.y = 0.001;
+  group.add(innerDot);
+
+  group.visible = false;
+  return group;
+}
+
+function easeOutBack(t) {
+  const c1 = 1.45;
+  const c3 = c1 + 1;
+  return 1 + c3 * Math.pow(t - 1, 3) + c1 * Math.pow(t - 1, 2);
+}
+
+/**
+ * Guided 5-stage WebAR pipeline for Shurale ("Кышкы Әкият", Innopolis):
+ *   1. loading        -> Load 3D Shurale model
+ *   2. calibrating    -> Interactive horizontal pan coaching with live progress bar (waits for SLAM NORMAL)
+ *   3. scanning       -> Point camera at the printed A4 plaque (unlocks Shurale & calibrates floorY)
+ *   4. ready_to_place -> Live floor aiming reticle + single prominent "Поставить" CTA
+ *   5. placed         -> Shurale pops in & locks in SLAM world (360° walk + Photo/Video + "Переставить")
  */
 export function createShuralePipeline({
   getSettings,
   imageOnly = false,
+  onStageChange,
+  onCalibrationProgress,
   onStatusChange,
   onDirectionHint,
   onTelemetry,
   onError,
 }) {
-  const disableSlamGate = () => Boolean(imageOnly);
   let scene = null;
   let renderer = null;
   let camera = null;
@@ -172,6 +225,12 @@ export function createShuralePipeline({
   let dirLight = null;
   let plaqueOutline = null;
   let floorReticle = null;
+
+  // Core guided stage machine: 'loading' | 'calibrating' | 'scanning' | 'ready_to_place' | 'placed'
+  let stage = 'loading';
+  let isRelocating = false;
+  let plaqueUnlocked = false;
+  let plaqueFoundBannerTimer = null;
 
   let isModelLoaded = false;
   let modelLoadMs = 0;
@@ -184,17 +243,39 @@ export function createShuralePipeline({
   let lockCount = 0;
   let trackingStatus = imageOnly ? 'IMAGE_ONLY' : 'INITIALIZING';
 
-  const CALIBRATION_FRAMES = 10;
+  // Interactive calibration motion tracking
+  let motionProgress = 0;       // 0..1 accumulated from real gentle movement
+  let displayedCalib = 0;       // smoothed 0..1 sent to UI progress bar
+  let calibCompleting = false;  // true once SLAM is NORMAL and bar is finishing to 100%
+  let calibDoneTimer = null;
+  let highMotionSince = 0;      // safety valve timestamp for featureless snow/walls
+  let tooFastUntil = 0;
+  let hasPrevCamPose = false;
+  const prevCamPos = new THREE.Vector3();
+  const prevCamQuat = new THREE.Quaternion();
+  let lastDeviceAlpha = null;
+  let pendingOrientationDelta = 0;
+
+  // Pop-in spawn animation state
+  let popAnimStart = 0;
+  let popTargetScale = 1.0;
+  let popActive = false;
+
+  // Saved anchor transform for Cancel during relocation
+  let savedAnchorState = null;
+
+  const PLAQUE_UNLOCK_FRAMES = 5;
   let poseSamples = [];
-  let lockedPlaquePose = null; // { position: Vector3, quaternion: Quaternion, scale: number }
+  let lockedPlaquePose = null;
   let lastPlaquePose = null;
   let lastFrameTime = performance.now();
   let fpsAccumulator = 0;
   let fpsFrames = 0;
   let currentFps = 0;
   let lastTelemetryPush = 0;
+  let lastCalibPush = 0;
 
-  // Reusable math temporaries (zero per-frame allocations)
+  // Reusable math temporaries
   const tmpForward = new THREE.Vector3();
   const tmpRight = new THREE.Vector3();
   const tmpDesiredPos = new THREE.Vector3();
@@ -208,6 +289,32 @@ export function createShuralePipeline({
   const tmpFloorPlane = new THREE.Plane();
   const tmpHit = new THREE.Vector3();
   const tmpCamDir = new THREE.Vector3();
+
+  // Secondary orientation listener to make calibration bar ultra-responsive on iOS/Android
+  // even before XR8 SLAM finishes first position updates
+  const handleDeviceOrientation = (ev) => {
+    if (stage !== 'calibrating') return;
+    if (typeof ev.alpha !== 'number') return;
+    if (lastDeviceAlpha != null) {
+      let diff = Math.abs(ev.alpha - lastDeviceAlpha);
+      if (diff > 180) diff = 360 - diff;
+      // Ignore tiny jitter (< 0.25 deg) and huge wrap glitches (> 35 deg)
+      if (diff > 0.25 && diff < 35) {
+        pendingOrientationDelta += diff;
+      }
+    }
+    lastDeviceAlpha = ev.alpha;
+  };
+
+  function emitStage(nextStage, meta = {}) {
+    stage = nextStage;
+    onStageChange?.(nextStage, {
+      imageOnly,
+      isRelocating,
+      plaqueUnlocked,
+      ...meta,
+    });
+  }
 
   function computeUnitsPerMeter(detailScale, settings) {
     if (!settings.useTargetScaleCalibration && !imageOnly) {
@@ -224,7 +331,6 @@ export function createShuralePipeline({
   function computeDesiredTransform(pose, settings) {
     const unitsPerMeter = computeUnitsPerMeter(pose.scale, settings);
 
-    // Plaque front normal (+Z in target local space), projected onto horizontal XZ plane
     tmpForward.set(0, 0, 1).applyQuaternion(pose.quaternion);
     tmpForward.y = 0;
     if (tmpForward.lengthSq() < 1e-4) {
@@ -233,16 +339,13 @@ export function createShuralePipeline({
       tmpForward.normalize();
     }
 
-    // Horizontal RIGHT of plaque from viewer's perspective: worldUp × forward
     tmpRight.crossVectors(WORLD_UP, tmpForward).normalize();
 
-    // World anchor on the ground beside the plaque
     tmpDesiredPos.copy(pose.position)
       .addScaledVector(tmpRight, settings.offsetRightM * unitsPerMeter)
       .addScaledVector(tmpForward, settings.offsetForwardM * unitsPerMeter)
       .addScaledVector(WORLD_UP, -settings.mountHeightM * unitsPerMeter);
 
-    // Shurale faces +Z in his local GLB space -> align to plaque forward + user yaw offset
     const baseYaw = Math.atan2(tmpForward.x, tmpForward.z);
     const totalYaw = baseYaw + THREE.MathUtils.degToRad(settings.yawOffsetDeg);
     tmpDesiredQuat.setFromAxisAngle(WORLD_UP, totalYaw);
@@ -268,11 +371,8 @@ export function createShuralePipeline({
       shuraleAnchor.quaternion.copy(quaternion);
       shuraleAnchor.scale.copy(scale);
     } else {
-      // Reject sudden single-frame tracking glitches (> 2.5m jump in one frame)
       const jumpDist = shuraleAnchor.position.distanceTo(position);
-      if (jumpDist > 2.5 * scale.x) {
-        return;
-      }
+      if (jumpDist > 2.5 * scale.x) return;
       shuraleAnchor.position.lerp(position, alpha);
       shuraleAnchor.quaternion.slerp(quaternion, alpha);
       shuraleAnchor.scale.lerp(scale, alpha);
@@ -282,37 +382,88 @@ export function createShuralePipeline({
   function updatePlaqueOutline(detail) {
     if (!plaqueOutline) return;
     const settings = getSettings();
-    plaqueOutline.visible = Boolean(!isCaptureMode && isTargetVisible && settings.showPlaqueDebug);
+    plaqueOutline.visible = Boolean(
+      !isCaptureMode &&
+      isTargetVisible &&
+      settings.showPlaqueDebug &&
+      (stage === 'scanning' || stage === 'placed'),
+    );
     if (!detail) return;
     plaqueOutline.position.set(detail.position.x, detail.position.y, detail.position.z);
     plaqueOutline.quaternion.set(detail.rotation.x, detail.rotation.y, detail.rotation.z, detail.rotation.w);
     const s = detail.scale || 1;
-    // 8th Wall planar 3:4 portrait target has scaledWidth = 0.75, scaledHeight = 1.0
     const sw = detail.scaledWidth || 0.75;
     const sh = detail.scaledHeight || 1.0;
     plaqueOutline.scale.set(sw * s, sh * s, s);
   }
 
+  function enterScanningStage() {
+    clearTimeout(calibDoneTimer);
+    calibDoneTimer = null;
+    emitStage('scanning');
+    onStatusChange?.('searching', 'Найдите табличку «Кышкы Әкият»');
+  }
+
+  function enterReadyToPlaceStage({ relocating = false } = {}) {
+    isRelocating = Boolean(relocating);
+    if (isRelocating && shuraleAnchor && isAnchored) {
+      savedAnchorState = {
+        position: shuraleAnchor.position.clone(),
+        quaternion: shuraleAnchor.quaternion.clone(),
+        scale: shuraleAnchor.scale.clone(),
+      };
+      // Hide Shurale briefly while choosing the new spot so the floor reticle is crystal clear
+      shuraleAnchor.visible = false;
+    } else {
+      savedAnchorState = null;
+    }
+
+    emitStage('ready_to_place', { isRelocating });
+    onStatusChange?.(
+      'searching',
+      isRelocating ? 'Выберите новое место на полу' : 'Наведите круг на пол и нажмите «Поставить»',
+    );
+  }
+
+  function startCalibrationStage() {
+    clearTimeout(calibDoneTimer);
+    calibDoneTimer = null;
+    motionProgress = 0;
+    displayedCalib = 0;
+    calibCompleting = false;
+    highMotionSince = 0;
+    hasPrevCamPose = false;
+    lastDeviceAlpha = null;
+    pendingOrientationDelta = 0;
+    tooFastUntil = 0;
+
+    if (imageOnly) {
+      isSlamReady = true;
+      enterScanningStage();
+      return;
+    }
+
+    emitStage('calibrating');
+    onStatusChange?.('calibrating', 'Медленно ведите телефон вбок');
+    onCalibrationProgress?.({ progress: 0, tooFast: false, done: false });
+  }
+
   function buildSceneObjects() {
-    // Configure renderer for crisp PBR + soft shadows
     renderer.outputColorSpace = THREE.SRGBColorSpace;
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
     renderer.toneMappingExposure = 1.08;
     renderer.shadowMap.enabled = true;
     renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 
-    // Winter-friendly ambient + sky/snow hemisphere light
     const hemi = new THREE.HemisphereLight(0xe4f1ff, 0x8ea3b8, 1.35);
     hemi.position.set(0, 6, 0);
     scene.add(hemi);
 
-    // Anchor group that lives in SLAM WORLD coordinates (never parented to transient target)
     shuraleAnchor = new THREE.Group();
     shuraleAnchor.name = 'shurale-world-anchor';
     shuraleAnchor.visible = false;
     scene.add(shuraleAnchor);
 
-    // Directional streetlamp/sun light attached to anchor so shadow frustum stays tight on Shurale
     dirLight = new THREE.DirectionalLight(0xfff4e4, 1.65);
     dirLight.position.set(1.6, 3.6, 2.2);
     dirLight.castShadow = true;
@@ -330,7 +481,6 @@ export function createShuralePipeline({
     shuraleAnchor.add(dirLight.target);
     dirLight.target.position.set(0, 0.8, 0);
 
-    // 1) Real-time Shadow Catcher plane at Y = 0
     const shadowPlaneGeo = new THREE.PlaneGeometry(3.2, 3.2);
     shadowPlaneGeo.rotateX(-Math.PI / 2);
     const shadowPlaneMat = new THREE.ShadowMaterial({ opacity: 0.42 });
@@ -339,7 +489,6 @@ export function createShuralePipeline({
     shadowPlane.receiveShadow = true;
     shuraleAnchor.add(shadowPlane);
 
-    // 2) Subtle soft contact AO shadow right under Shurale's feet (works even in dim twilight)
     const aoGeo = new THREE.PlaneGeometry(0.95, 0.95);
     aoGeo.rotateX(-Math.PI / 2);
     const aoMat = new THREE.MeshBasicMaterial({
@@ -352,30 +501,18 @@ export function createShuralePipeline({
     aoMesh.position.set(0, 0.002, -0.05);
     shuraleAnchor.add(aoMesh);
 
-    // Debug plaque outline (shows detected 3:4 frame on the wall while visible)
     const edges = new THREE.EdgesGeometry(new THREE.PlaneGeometry(1, 1));
-    const lineMat = new THREE.LineBasicMaterial({ color: 0x22c55e, linewidth: 2 });
+    const lineMat = new THREE.LineBasicMaterial({ color: 0x1e4d4b, linewidth: 2 });
     plaqueOutline = new THREE.LineSegments(edges, lineMat);
     plaqueOutline.visible = false;
     scene.add(plaqueOutline);
 
-    // Subtle floor aiming ring shown before Shurale is placed so "Сюда" aiming is effortless
-    const ringGeo = new THREE.RingGeometry(0.18, 0.24, 36);
-    ringGeo.rotateX(-Math.PI / 2);
-    const ringMat = new THREE.MeshBasicMaterial({
-      color: 0x38bdf8,
-      transparent: true,
-      opacity: 0.75,
-      side: THREE.DoubleSide,
-      depthWrite: false,
-    });
-    floorReticle = new THREE.Mesh(ringGeo, ringMat);
-    floorReticle.visible = false;
+    floorReticle = createFloorReticle();
     scene.add(floorReticle);
 
-    // Load optimized Shurale GLB (1.60 m real-world height, feet at Y = 0)
     const t0 = performance.now();
     const loader = new GLTFLoader();
+    emitStage('loading');
     onStatusChange?.('loading', 'Зовём Шурале...');
 
     loader.load(
@@ -387,7 +524,6 @@ export function createShuralePipeline({
           if (obj.isMesh) {
             obj.castShadow = true;
             obj.receiveShadow = false;
-            // Critical for SkinnedMesh: prevent frustum culling pop-out when walking close
             obj.frustumCulled = false;
           }
         });
@@ -402,13 +538,10 @@ export function createShuralePipeline({
         }
 
         isModelLoaded = true;
-        if (isAnchored) {
+        if (stage === 'loading') {
+          startCalibrationStage();
+        } else if (stage === 'placed' && shuraleAnchor) {
           shuraleAnchor.visible = true;
-          onStatusChange?.('slam', 'Шурале стоит здесь');
-        } else if (isSlamReady) {
-          onStatusChange?.('searching', 'Наведите на табличку или нажмите «Поставить»');
-        } else {
-          onStatusChange?.('calibrating', 'Плавно поведите телефоном вбок');
         }
       },
       (evt) => {
@@ -419,7 +552,10 @@ export function createShuralePipeline({
       },
       (err) => {
         console.error('Failed to load Shurale GLB:', err);
-        onError?.('Ошибка загрузки 3D-модели', 'Не удалось загрузить Shurale_Happy_Idle_opt.glb. Проверьте сеть 4G и обновите страницу.');
+        onError?.(
+          'Ошибка загрузки 3D-модели',
+          'Не удалось загрузить Shurale_Happy_Idle_opt.glb. Проверьте сеть 4G и обновите страницу.',
+        );
       },
     );
   }
@@ -448,7 +584,6 @@ export function createShuralePipeline({
     const my = median(samples.map((s) => s.y));
     const mz = median(samples.map((s) => s.z));
     const ms = median(samples.map((s) => s.scale));
-    // Circular mean for horizontal forward direction (fx, fz)
     let sumFx = 0;
     let sumFz = 0;
     for (const s of samples) {
@@ -465,14 +600,12 @@ export function createShuralePipeline({
     };
   }
 
-  function recordCalibrationSample(pose) {
+  function recordPlaqueSample(pose) {
     tmpForward.set(0, 0, 1).applyQuaternion(pose.quaternion);
     tmpForward.y = 0;
-    if (tmpForward.lengthSq() < 1e-4) {
-      tmpForward.set(0, 0, 1);
-    } else {
-      tmpForward.normalize();
-    }
+    if (tmpForward.lengthSq() < 1e-4) tmpForward.set(0, 0, 1);
+    else tmpForward.normalize();
+
     poseSamples.push({
       x: pose.position.x,
       y: pose.position.y,
@@ -484,24 +617,34 @@ export function createShuralePipeline({
 
     const medPose = computeMedianPose(poseSamples);
     lockedPlaquePose = medPose;
-    applyPoseToAnchor(medPose, { snap: !isAnchored, alpha: 0.35 });
-    isAnchored = true;
-    if (isModelLoaded && shuraleAnchor) {
-      shuraleAnchor.visible = true;
+
+    // In image-only fallback mode (no gyroscope/SLAM), place Shurale directly beside the plaque
+    if (imageOnly) {
+      applyPoseToAnchor(medPose, { snap: !isAnchored, alpha: 0.28 });
+      isAnchored = true;
+      isLocked = true;
+      plaqueUnlocked = true;
+      if (isModelLoaded && shuraleAnchor) shuraleAnchor.visible = true;
+      if (stage !== 'placed') {
+        emitStage('placed', { canRelocate: false });
+        onStatusChange?.('slam', 'Шурале стоит здесь');
+      }
+      return;
     }
 
-    if (poseSamples.length >= CALIBRATION_FRAMES) {
-      isLocked = true;
-      applyPoseToAnchor(medPose, { snap: true });
-      onStatusChange?.(
-        'slam',
-        isModelLoaded ? 'Шурале стоит здесь' : 'Место найдено, зовём Шурале...',
-      );
-    } else {
-      onStatusChange?.(
-        'tracking',
-        'Узнали табличку, ставим Шурале...',
-      );
+    // Standard SLAM guided flow: scanning plaque unlocks Step 4 (floor reticle + "Поставить" button)
+    if (poseSamples.length >= PLAQUE_UNLOCK_FRAMES && !plaqueUnlocked) {
+      plaqueUnlocked = true;
+      onStatusChange?.('tracking', 'Табличка найдена!');
+      emitStage('scanning', { plaqueMatched: true });
+      clearTimeout(plaqueFoundBannerTimer);
+      plaqueFoundBannerTimer = setTimeout(() => {
+        if (stage === 'scanning') {
+          enterReadyToPlaceStage({ relocating: false });
+        }
+      }, 420);
+    } else if (!plaqueUnlocked) {
+      onStatusChange?.('tracking', 'Узнаём табличку...');
     }
   }
 
@@ -512,22 +655,8 @@ export function createShuralePipeline({
     lastPlaquePose = pose;
     updatePlaqueOutline(detail);
 
-    if (!isSlamReady && !isAnchored && !disableSlamGate()) {
-      onStatusChange?.('calibrating', 'Табличка видна — поведите телефоном вбок');
-      return;
-    }
-
-    if (!isLocked) {
-      recordCalibrationSample(pose);
-      return;
-    }
-
-    // Already HARD-LOCKED in SLAM world: only gently realign if user explicitly enabled it
-    const settings = getSettings();
-    if (settings.autoRealignOnPlaque) {
-      lockedPlaquePose = pose;
-      applyPoseToAnchor(pose, { snap: false, alpha: 0.04 });
-      onStatusChange?.('tracking', 'Шурале стоит здесь');
+    if (stage === 'scanning' || (imageOnly && stage === 'placed')) {
+      recordPlaqueSample(pose);
     }
   }
 
@@ -537,44 +666,25 @@ export function createShuralePipeline({
     lastPlaquePose = pose;
     updatePlaqueOutline(detail);
 
-    if (!isSlamReady && !isAnchored && !disableSlamGate()) {
+    if (stage === 'scanning') {
+      recordPlaqueSample(pose);
       return;
     }
 
-    if (!isLocked) {
-      recordCalibrationSample(pose);
-      return;
-    }
-
-    // Hard-locked by default in SLAM mode; in image-only fallback mode track plaque directly
-    const settings = getSettings();
-    if (imageOnly) {
+    if (imageOnly && stage === 'placed') {
       lockedPlaquePose = pose;
       applyPoseToAnchor(pose, { snap: false, alpha: 0.25 });
-      return;
-    }
-    if (settings.autoRealignOnPlaque) {
-      lockedPlaquePose = pose;
-      applyPoseToAnchor(pose, { snap: false, alpha: 0.04 });
     }
   }
 
   function handleImageLost() {
     isTargetVisible = false;
-    if (plaqueOutline) {
-      plaqueOutline.visible = false;
-    }
-    // CRITICAL: Do NOT hide shuraleAnchor! It remains anchored in SLAM world coordinates.
-    if (isLocked) {
-      onStatusChange?.('slam', 'Шурале стоит здесь');
-    } else if (isAnchored) {
-      // User moved camera away before 10 frames finished -> lock immediately on what we have!
-      isLocked = true;
-      onStatusChange?.('slam', 'Шурале стоит здесь');
-    } else if (isSlamReady) {
-      onStatusChange?.('searching', 'Наведите на табличку или нажмите «Поставить»');
-    } else {
-      onStatusChange?.('calibrating', 'Плавно поведите телефоном вбок');
+    if (plaqueOutline) plaqueOutline.visible = false;
+
+    if (stage === 'scanning' && poseSamples.length > 0 && !plaqueUnlocked && !imageOnly) {
+      // User already scanned plaque briefly before moving phone away -> unlock right away!
+      plaqueUnlocked = true;
+      enterReadyToPlaceStage({ relocating: false });
     }
   }
 
@@ -586,7 +696,6 @@ export function createShuralePipeline({
       const floorY = activePose.position.y - settings.mountHeightM * unitsPerMeter;
       return { floorY, unitsPerMeter, calibratedByPlaque: true };
     }
-    // Pure SLAM fallback (before scanning plaque): floor is Y = 0, camera started at Y = 1.4
     return { floorY: 0, unitsPerMeter: 1.0, calibratedByPlaque: false };
   }
 
@@ -607,7 +716,6 @@ export function createShuralePipeline({
       }
     }
 
-    // Fallback when phone is held level/upward: place 1.8 m ahead of camera on the floor
     camera.getWorldDirection(tmpCamDir);
     tmpCamDir.y = 0;
     if (tmpCamDir.lengthSq() < 1e-4) tmpCamDir.set(0, 0, -1);
@@ -625,9 +733,84 @@ export function createShuralePipeline({
 
     if (detail.status === 'NORMAL' && !isSlamReady) {
       isSlamReady = true;
-      if (!isAnchored && isModelLoaded) {
-        onStatusChange?.('searching', 'Наведите на табличку или нажмите «Поставить»');
+    }
+  }
+
+  function updateCalibrationProgress(now, dt) {
+    if (stage !== 'calibrating' || !camera) return;
+
+    // Measure live real camera pan (angle + lateral translation + gyro fallback)
+    let frameMotion = 0;
+    let angSpeed = 0;
+    if (hasPrevCamPose && dt > 0.001) {
+      const angDelta = camera.quaternion.angleTo(prevCamQuat); // radians
+      const posDelta = camera.position.distanceTo(prevCamPos); // meters
+      angSpeed = angDelta / dt;
+
+      // Smooth gentle motion fills the bar; violent shaking shows "Чуть медленнее"
+      if (angSpeed > 3.5 && angDelta < 1.0) {
+        tooFastUntil = now + 800;
+        frameMotion += Math.min(angDelta, 0.015) * 0.4;
+      } else if (angDelta > 0.0025 || posDelta > 0.002) {
+        frameMotion += angDelta * 1.15 + posDelta * 1.8;
       }
+    }
+    prevCamPos.copy(camera.position);
+    prevCamQuat.copy(camera.quaternion);
+    hasPrevCamPose = true;
+
+    if (pendingOrientationDelta > 0) {
+      const deg = pendingOrientationDelta;
+      pendingOrientationDelta = 0;
+      const degSpeed = deg / Math.max(dt, 0.016);
+      if (degSpeed > 165) {
+        tooFastUntil = now + 900;
+      } else {
+        frameMotion += (deg / 45) * 0.55;
+      }
+    }
+
+    if (!calibCompleting) {
+      // Real movement fills bar up to 88% while waiting for SLAM NORMAL
+      motionProgress = Math.min(0.88, motionProgress + frameMotion);
+
+      if (motionProgress >= 0.85 && !highMotionSince) {
+        highMotionSince = now;
+      }
+
+      // Complete immediately on SLAM NORMAL, or after 4s of sustained motion on featureless white snow
+      const snowFallbackReady = highMotionSince > 0 && now - highMotionSince > 4000;
+      if (isSlamReady || snowFallbackReady) {
+        calibCompleting = true;
+      }
+    }
+
+    if (calibCompleting) {
+      // Zip cleanly to 100% without slow asymptotic crawl near 98%
+      displayedCalib = Math.min(1.0, displayedCalib + Math.max((1.0 - displayedCalib) * dt * 6.5, dt * 0.75));
+    } else {
+      displayedCalib += (motionProgress - displayedCalib) * Math.min(1, dt * 8.5);
+    }
+
+    const tooFast = now < tooFastUntil && !calibCompleting;
+    const isDone = calibCompleting && displayedCalib >= 1.0;
+
+    if (now - lastCalibPush > 45 || isDone) {
+      lastCalibPush = now;
+      onCalibrationProgress?.({
+        progress: displayedCalib,
+        tooFast,
+        done: isDone,
+      });
+    }
+
+    if (isDone && !calibDoneTimer) {
+      onStatusChange?.('tracking', 'Готово!');
+      calibDoneTimer = setTimeout(() => {
+        if (stage === 'calibrating') {
+          enterScanningStage();
+        }
+      }, 340);
     }
   }
 
@@ -639,14 +822,19 @@ export function createShuralePipeline({
       renderer = xrScene.renderer;
       camera = xrScene.camera;
 
-      // Place initial camera at realistic eye height; absolute SLAM overrides once converged
       camera.position.set(0, 1.4, 0);
       window.XR8.XrController.updateCameraProjectionMatrix({
         origin: camera.position,
         facing: camera.quaternion,
       });
 
+      window.addEventListener('deviceorientation', handleDeviceOrientation, { passive: true });
       buildSceneObjects();
+    },
+    onDetach: () => {
+      window.removeEventListener('deviceorientation', handleDeviceOrientation);
+      clearTimeout(calibDoneTimer);
+      clearTimeout(plaqueFoundBannerTimer);
     },
     onUpdate: () => {
       const now = performance.now();
@@ -657,14 +845,31 @@ export function createShuralePipeline({
         mixer.update(dt);
       }
 
-      // Show floor aiming ring when camera points at the floor and Shurale is not yet placed
+      // Smooth spring pop-in animation when Shurale is placed
+      if (popActive && shuraleAnchor) {
+        const t = Math.min(1, (now - popAnimStart) / 300);
+        const eased = Math.max(0.05, easeOutBack(t));
+        shuraleAnchor.scale.setScalar(popTargetScale * eased);
+        if (t >= 1) {
+          shuraleAnchor.scale.setScalar(popTargetScale);
+          popActive = false;
+        }
+      }
+
+      // Step 2 live motion progress bar
+      if (stage === 'calibrating') {
+        updateCalibrationProgress(now, dt);
+      }
+
+      // Step 4 floor aiming ring (visible ONLY in ready_to_place stage)
       if (floorReticle && camera) {
-        if (!isAnchored && !isCaptureMode) {
+        if (stage === 'ready_to_place' && !isCaptureMode) {
           const aim = raycastFloorPoint();
-          if (aim && aim.exactRay) {
+          if (aim) {
             floorReticle.position.copy(aim.point);
-            floorReticle.position.y += 0.004 * aim.unitsPerMeter;
-            floorReticle.scale.setScalar(aim.unitsPerMeter);
+            floorReticle.position.y += 0.005 * aim.unitsPerMeter;
+            const pulse = 1 + Math.sin(now * 0.0055) * 0.06;
+            floorReticle.scale.setScalar(aim.unitsPerMeter * pulse);
             floorReticle.visible = true;
           } else {
             floorReticle.visible = false;
@@ -674,7 +879,7 @@ export function createShuralePipeline({
         }
       }
 
-      // Track FPS & push compact telemetry ~4 times/sec
+      // Track FPS & telemetry
       fpsAccumulator += dt;
       fpsFrames += 1;
       if (fpsAccumulator >= 0.5) {
@@ -695,12 +900,18 @@ export function createShuralePipeline({
             ? camera.position.distanceTo(shuraleAnchor.position) / Math.max(uPerM, 0.01)
             : null;
 
-        // Compute off-screen direction hint when Shurale is anchored but outside view
         let dirHint = null;
-        if (isAnchored && isModelLoaded && camera && shuraleAnchor && shuraleAnchor.visible) {
+        if (
+          stage === 'placed' &&
+          isAnchored &&
+          isModelLoaded &&
+          camera &&
+          shuraleAnchor &&
+          shuraleAnchor.visible
+        ) {
           camera.updateMatrixWorld();
           tmpCheckPoint.copy(shuraleAnchor.position);
-          tmpCheckPoint.y += 0.8 * shuraleAnchor.scale.y; // chest height
+          tmpCheckPoint.y += 0.8 * shuraleAnchor.scale.y;
           tmpCamInv.copy(camera.matrixWorld).invert();
           tmpCamSpace.copy(tmpCheckPoint).applyMatrix4(tmpCamInv);
           const proj = tmpCheckPoint.clone().project(camera);
@@ -721,11 +932,13 @@ export function createShuralePipeline({
 
         onTelemetry?.({
           fps: currentFps,
+          stage,
           isModelLoaded,
           modelLoadMs,
           isAnchored,
           isLocked,
           isSlamReady,
+          plaqueUnlocked,
           sampleCount: poseSamples.length,
           trackingStatus,
           isTargetVisible,
@@ -749,57 +962,95 @@ export function createShuralePipeline({
 
   return {
     pipelineModule,
+    getStage: () => stage,
     placeHere() {
       if (!shuraleAnchor || !camera) {
         return { ok: false, reason: 'Камера ещё не готова' };
       }
       const aim = raycastFloorPoint();
       if (!aim) {
-        return { ok: false, reason: 'Не удалось определить точку на полу' };
+        return { ok: false, reason: 'Наведите круг на пол' };
       }
       const settings = getSettings();
       const modelScale = settings.modelScale ?? 1.0;
 
-      // Turn Shurale to face the user horizontally
-      const yaw = Math.atan2(
-        camera.position.x - aim.point.x,
-        camera.position.z - aim.point.z,
-      ) + THREE.MathUtils.degToRad(settings.yawOffsetDeg);
+      const yaw =
+        Math.atan2(camera.position.x - aim.point.x, camera.position.z - aim.point.z) +
+        THREE.MathUtils.degToRad(settings.yawOffsetDeg);
 
       shuraleAnchor.position.copy(aim.point);
       shuraleAnchor.quaternion.setFromAxisAngle(WORLD_UP, yaw);
-      shuraleAnchor.scale.setScalar(aim.unitsPerMeter * modelScale);
+
+      popTargetScale = aim.unitsPerMeter * modelScale;
+      popAnimStart = performance.now();
+      popActive = true;
+      shuraleAnchor.scale.setScalar(popTargetScale * 0.08);
 
       isAnchored = true;
       isLocked = true;
       isManualPlaced = true;
+      isRelocating = false;
+      savedAnchorState = null;
       if (floorReticle) floorReticle.visible = false;
       if (isModelLoaded) {
         shuraleAnchor.visible = true;
       }
 
-      onStatusChange?.(
-        'slam',
-        isSlamReady
-          ? 'Шурале стоит здесь'
-          : 'Шурале поставлен сюда',
-      );
+      emitStage('placed', { canRelocate: !imageOnly });
+      onStatusChange?.('slam', 'Шурале стоит здесь');
       return {
         ok: true,
         calibratedByPlaque: aim.calibratedByPlaque,
         isSlamReady,
       };
     },
+    startRelocate() {
+      if (imageOnly) {
+        return { ok: false, reason: 'В упрощённом режиме Шурале привязан к табличке' };
+      }
+      enterReadyToPlaceStage({ relocating: true });
+      return { ok: true };
+    },
+    cancelRelocate() {
+      if (!isRelocating) return;
+      isRelocating = false;
+      if (savedAnchorState && shuraleAnchor) {
+        shuraleAnchor.position.copy(savedAnchorState.position);
+        shuraleAnchor.quaternion.copy(savedAnchorState.quaternion);
+        shuraleAnchor.scale.copy(savedAnchorState.scale);
+        if (isModelLoaded) shuraleAnchor.visible = true;
+      }
+      savedAnchorState = null;
+      if (floorReticle) floorReticle.visible = false;
+      emitStage('placed', { canRelocate: !imageOnly });
+      onStatusChange?.('slam', 'Шурале стоит здесь');
+    },
+    // Hidden dev helper (only reachable from triple-tap dev toolbar) to test without a physical plaque
+    devSkipToPlace() {
+      isSlamReady = true;
+      plaqueUnlocked = true;
+      clearTimeout(calibDoneTimer);
+      clearTimeout(plaqueFoundBannerTimer);
+      enterReadyToPlaceStage({ relocating: false });
+    },
     applySettingsLive() {
       const settings = getSettings();
       if (plaqueOutline) {
-        plaqueOutline.visible = Boolean(!isCaptureMode && isTargetVisible && settings.showPlaqueDebug);
+        plaqueOutline.visible = Boolean(
+          !isCaptureMode &&
+          isTargetVisible &&
+          settings.showPlaqueDebug &&
+          (stage === 'scanning' || stage === 'placed'),
+        );
       }
       if (isManualPlaced && isAnchored && shuraleAnchor) {
         const { floorY, unitsPerMeter } = getCurrentFloorAndScale();
         const modelScale = settings.modelScale ?? 1.0;
         shuraleAnchor.position.y = floorY;
-        shuraleAnchor.scale.setScalar(unitsPerMeter * modelScale);
+        popTargetScale = unitsPerMeter * modelScale;
+        if (!popActive) {
+          shuraleAnchor.scale.setScalar(popTargetScale);
+        }
         return;
       }
       const activePose = lockedPlaquePose || lastPlaquePose;
@@ -815,17 +1066,30 @@ export function createShuralePipeline({
       } else {
         const settings = getSettings();
         if (plaqueOutline) {
-          plaqueOutline.visible = Boolean(isTargetVisible && settings.showPlaqueDebug);
+          plaqueOutline.visible = Boolean(
+            isTargetVisible &&
+            settings.showPlaqueDebug &&
+            (stage === 'scanning' || stage === 'placed'),
+          );
         }
       }
     },
     resetAnchor() {
+      clearTimeout(calibDoneTimer);
+      clearTimeout(plaqueFoundBannerTimer);
+      calibDoneTimer = null;
+      plaqueFoundBannerTimer = null;
+
       isAnchored = false;
       isLocked = false;
       isManualPlaced = false;
+      isRelocating = false;
+      plaqueUnlocked = false;
+      savedAnchorState = null;
+      popActive = false;
       isTargetVisible = false;
-      isSlamReady = false;
-      trackingStatus = 'INITIALIZING';
+      isSlamReady = Boolean(imageOnly);
+      trackingStatus = imageOnly ? 'IMAGE_ONLY' : 'INITIALIZING';
       poseSamples = [];
       lockedPlaquePose = null;
       lastPlaquePose = null;
@@ -838,7 +1102,7 @@ export function createShuralePipeline({
         console.warn('recenter warning:', err);
       }
       onDirectionHint?.(null);
-      onStatusChange?.('calibrating', 'Плавно поведите телефоном вбок');
+      startCalibrationStage();
     },
   };
 }
