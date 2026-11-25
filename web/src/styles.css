@@ -522,6 +522,11 @@ body {
   height: 22px;
 }
 
+.circle-icon-place {
+  width: 28px;
+  height: 28px;
+}
+
 .side-label {
   padding: 2px 8px;
   border-radius: 999px;

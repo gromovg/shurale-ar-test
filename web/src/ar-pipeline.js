@@ -391,7 +391,7 @@ export function createShuralePipeline({
           shuraleAnchor.visible = true;
           onStatusChange?.('slam', 'Шурале стоит здесь');
         } else if (isSlamReady) {
-          onStatusChange?.('searching', 'Наведите на табличку или нажмите «Рядом»');
+          onStatusChange?.('searching', 'Наведите на табличку или нажмите «Поставить»');
         } else {
           onStatusChange?.('calibrating', 'Плавно поведите телефоном вбок');
         }
@@ -557,7 +557,7 @@ export function createShuralePipeline({
       isLocked = true;
       onStatusChange?.('slam', 'Шурале стоит здесь');
     } else if (isSlamReady) {
-      onStatusChange?.('searching', 'Наведите на табличку или нажмите «Рядом»');
+      onStatusChange?.('searching', 'Наведите на табличку или нажмите «Поставить»');
     } else {
       onStatusChange?.('calibrating', 'Плавно поведите телефоном вбок');
     }
@@ -611,7 +611,7 @@ export function createShuralePipeline({
     if (detail.status === 'NORMAL' && !isSlamReady) {
       isSlamReady = true;
       if (!isAnchored && isModelLoaded) {
-        onStatusChange?.('searching', 'Наведите на табличку или нажмите «Рядом»');
+        onStatusChange?.('searching', 'Наведите на табличку или нажмите «Поставить»');
       }
     }
   }
@@ -767,7 +767,7 @@ export function createShuralePipeline({
         'slam',
         isSlamReady
           ? 'Шурале стоит здесь'
-          : 'Шурале поставлен рядом',
+          : 'Шурале поставлен сюда',
       );
       return {
         ok: true,

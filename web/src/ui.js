@@ -506,7 +506,7 @@ export function createUIController({
   // Camera & Dev actions
   el.btnReset.addEventListener('click', () => {
     onReset?.();
-    showToast('Позиция сброшена — наведите на табличку или нажмите «Рядом»');
+    showToast('Позиция сброшена — наведите на табличку или нажмите «Поставить»');
   });
 
   el.btnPlaceHere.addEventListener('click', () => {
@@ -516,8 +516,8 @@ export function createUIController({
     } else if (res && res.ok) {
       showToast(
         res.isSlamReady
-          ? 'Шурале поставлен рядом'
-          : 'Поведите телефоном пару секунд и нажмите «Рядом» ещё раз',
+          ? 'Шурале поставлен сюда'
+          : 'Поведите телефоном пару секунд и нажмите «Поставить» ещё раз',
         2600,
       );
     }
@@ -593,7 +593,7 @@ export function createUIController({
         el.scanLabel.textContent =
           mode === 'calibrating'
             ? 'Плавно поведите телефоном вбок'
-            : 'Наведите на табличку или нажмите «Рядом»';
+            : 'Наведите на табличку или нажмите «Поставить»';
       }
     },
     setDirectionHint(text) {
