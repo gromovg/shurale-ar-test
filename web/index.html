@@ -35,6 +35,9 @@
     <div id="telemetry-lines">Инициализация...</div>
   </div>
 
+  <!-- Subtle off-screen direction hint when Shurale is anchored outside current view -->
+  <div id="direction-hint" class="direction-hint hidden"></div>
+
   <!-- Center subtle scan prompt (hidden once anchored) -->
   <div id="scan-hint" class="scan-hint hidden">
     <div class="scan-frame">
@@ -80,6 +83,11 @@
       <button id="btn-close-settings" class="btn-ghost-sm" type="button">Закрыть</button>
     </div>
 
+    <div class="preset-row">
+      <button id="btn-preset-full" class="btn-preset" type="button">Улица / пол (1,6 м)</button>
+      <button id="btn-preset-desk" class="btn-preset" type="button">Тест у монитора (мини)</button>
+    </div>
+
     <div class="control-row">
       <div class="control-label">
         <span>Высота таблички (опустить ноги до пола)</span>
@@ -87,7 +95,7 @@
       </div>
       <div class="stepper-row">
         <button class="btn-step" data-step="mountHeightM" data-delta="-0.05" type="button">−5 см</button>
-        <input id="inp-mount-height" type="range" min="0.40" max="2.30" step="0.01" value="1.30" />
+        <input id="inp-mount-height" type="range" min="0.00" max="2.30" step="0.01" value="1.30" />
         <button class="btn-step" data-step="mountHeightM" data-delta="0.05" type="button">+5 см</button>
       </div>
     </div>

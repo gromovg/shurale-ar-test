@@ -1,6 +1,7 @@
 import './styles.css';
 import { loadSettings } from './config.js';
 import {
+  syncCanvasBufferSize,
   createFullWindowCanvasModule,
   createTorchModule,
   createShuralePipeline,
@@ -109,6 +110,7 @@ async function startARSession() {
     arController = createShuralePipeline({
       getSettings: () => settings,
       onStatusChange: (mode, text) => ui.setStatus(mode, text),
+      onDirectionHint: (text) => ui.setDirectionHint(text),
       onTelemetry: (info) => ui.updateTelemetry(info),
       onError: (title, message) => {
         ui.setStatus('error', title);
@@ -157,6 +159,8 @@ async function startARSession() {
     ]);
 
     const canvas = document.getElementById('camerafeed');
+    // Critical: size canvas drawing buffer to viewport × DPR BEFORE XR8.run()
+    syncCanvasBufferSize(canvas);
     XR8.run({
       canvas,
       allowedDevices: XR8.XrConfig.device().ANY,

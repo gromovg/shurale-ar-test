@@ -14,6 +14,9 @@ export const DEFAULT_SETTINGS = {
   // Extra Y-axis rotation of Shurale relative to facing forward out of plaque (degrees)
   yawOffsetDeg: 0,
 
+  // Character scale multiplier (1.0 = real 1.60 m height; 0.2 = 32 cm desk test)
+  modelScale: 1.0,
+
   // Actual tape-measured width of the black outer 3:4 tracking frame (mm)
   // Designed print size at 100% on A4 is 195 x 260 mm (aspect 3:4)
   targetWidthMm: 195,
@@ -24,6 +27,22 @@ export const DEFAULT_SETTINGS = {
 
   // Show green wireframe outline on the plaque while it is in view
   showPlaqueDebug: true,
+};
+
+export const PRESET_FULL_FLOOR = {
+  mountHeightM: 1.30,
+  offsetRightM: 1.20,
+  offsetForwardM: 0.35,
+  yawOffsetDeg: 0,
+  modelScale: 1.0,
+};
+
+export const PRESET_DESK_MINI = {
+  mountHeightM: 0.13,
+  offsetRightM: 0.22,
+  offsetForwardM: 0.08,
+  yawOffsetDeg: 0,
+  modelScale: 0.22,
 };
 
 export const TARGET_ASPECT_W_OVER_H = 3 / 4; // 0.75 (portrait 3:4)

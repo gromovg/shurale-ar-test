@@ -431,3 +431,37 @@ body {
   max-width: 88vw;
   pointer-events: none;
 }
+
+.direction-hint {
+  position: fixed;
+  left: 50%;
+  transform: translateX(-50%);
+  top: calc(max(12px, env(safe-area-inset-top)) + 54px);
+  z-index: 19;
+  padding: 7px 14px;
+  border-radius: 999px;
+  background: rgba(15, 26, 43, 0.85);
+  border: 1px solid rgba(56, 189, 248, 0.55);
+  color: #e0f2fe;
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+.preset-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.btn-preset {
+  padding: 8px 10px;
+  border-radius: 10px;
+  border: 1px solid rgba(56, 189, 248, 0.45);
+  background: rgba(56, 189, 248, 0.14);
+  color: var(--text-main);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}

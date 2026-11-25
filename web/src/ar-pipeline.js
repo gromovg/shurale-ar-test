@@ -8,18 +8,28 @@ window.THREE = THREE;
 const WORLD_UP = new THREE.Vector3(0, 1, 0);
 
 /**
- * Keeps #camerafeed full-viewport across iOS Safari dynamic toolbars & orientation changes.
+ * Keeps #camerafeed full-viewport AND matches canvas pixel buffer (width/height)
+ * to CSS viewport × DPR so 8th Wall camera feed renders crisp Retina HD with 1:1 aspect ratio.
  */
+export function syncCanvasBufferSize(canvas) {
+  if (!canvas) return;
+  const w = window.innerWidth;
+  const h = window.innerHeight;
+  const dpr = Math.min(window.devicePixelRatio || 1, 2);
+  const pw = Math.max(1, Math.round(w * dpr));
+  const ph = Math.max(1, Math.round(h * dpr));
+  if (canvas.width !== pw || canvas.height !== ph) {
+    canvas.width = pw;
+    canvas.height = ph;
+  }
+  canvas.style.width = `${w}px`;
+  canvas.style.height = `${h}px`;
+}
+
 export function createFullWindowCanvasModule() {
   let canvas = null;
 
-  const resize = () => {
-    if (!canvas) return;
-    const w = window.innerWidth;
-    const h = window.innerHeight;
-    canvas.style.width = `${w}px`;
-    canvas.style.height = `${h}px`;
-  };
+  const resize = () => syncCanvasBufferSize(canvas);
 
   return {
     name: 'full-window-canvas',
@@ -28,11 +38,15 @@ export function createFullWindowCanvasModule() {
       resize();
       window.addEventListener('resize', resize);
       window.addEventListener('orientationchange', resize);
+      window.visualViewport?.addEventListener('resize', resize);
     },
+    onVideoSizeChange: resize,
     onDeviceOrientationChange: resize,
+    onUpdate: resize,
     onDetach: () => {
       window.removeEventListener('resize', resize);
       window.removeEventListener('orientationchange', resize);
+      window.visualViewport?.removeEventListener('resize', resize);
     },
   };
 }
@@ -127,6 +141,7 @@ function createContactShadowTexture() {
 export function createShuralePipeline({
   getSettings,
   onStatusChange,
+  onDirectionHint,
   onTelemetry,
   onError,
 }) {
@@ -160,6 +175,9 @@ export function createShuralePipeline({
   const tmpDesiredPos = new THREE.Vector3();
   const tmpDesiredQuat = new THREE.Quaternion();
   const tmpDesiredScale = new THREE.Vector3();
+  const tmpCheckPoint = new THREE.Vector3();
+  const tmpCamSpace = new THREE.Vector3();
+  const tmpCamInv = new THREE.Matrix4();
 
   function computeUnitsPerMeter(detailScale, settings) {
     if (!settings.useTargetScaleCalibration) {
@@ -199,7 +217,8 @@ export function createShuralePipeline({
     const totalYaw = baseYaw + THREE.MathUtils.degToRad(settings.yawOffsetDeg);
     tmpDesiredQuat.setFromAxisAngle(WORLD_UP, totalYaw);
 
-    tmpDesiredScale.setScalar(unitsPerMeter);
+    const modelScale = settings.modelScale ?? 1.0;
+    tmpDesiredScale.setScalar(unitsPerMeter * modelScale);
 
     return {
       position: tmpDesiredPos,
@@ -469,7 +488,7 @@ export function createShuralePipeline({
         fpsFrames = 0;
       }
 
-      if (now - lastTelemetryPush > 250) {
+      if (now - lastTelemetryPush > 200) {
         lastTelemetryPush = now;
         const settings = getSettings();
         const uPerM = lastPlaquePose
@@ -479,6 +498,31 @@ export function createShuralePipeline({
           isAnchored && camera && shuraleAnchor
             ? camera.position.distanceTo(shuraleAnchor.position) / Math.max(uPerM, 0.01)
             : null;
+
+        // Compute off-screen direction hint when Shurale is anchored but outside view
+        let dirHint = null;
+        if (isAnchored && isModelLoaded && camera && shuraleAnchor && shuraleAnchor.visible) {
+          camera.updateMatrixWorld();
+          tmpCheckPoint.copy(shuraleAnchor.position);
+          tmpCheckPoint.y += 0.8 * shuraleAnchor.scale.y; // chest height
+          tmpCamInv.copy(camera.matrixWorld).invert();
+          tmpCamSpace.copy(tmpCheckPoint).applyMatrix4(tmpCamInv);
+          const proj = tmpCheckPoint.clone().project(camera);
+          const inFront = tmpCamSpace.z < -0.05;
+          const onScreen = inFront && Math.abs(proj.x) <= 0.95 && Math.abs(proj.y) <= 0.95;
+          if (!onScreen) {
+            const parts = [];
+            if (tmpCamSpace.x > 0.12) parts.push('правее →');
+            else if (tmpCamSpace.x < -0.12) parts.push('← левее');
+            if (tmpCamSpace.y < -0.12) parts.push('ниже ↓');
+            else if (tmpCamSpace.y > 0.12) parts.push('выше ↑');
+            if (!inFront && !parts.length) parts.push('позади ↺');
+            const distLabel = camDist != null ? ` (${camDist.toFixed(1)} м)` : '';
+            dirHint = `Шурале: ${parts.join(' ')}${distLabel}`;
+          }
+        }
+        onDirectionHint?.(dirHint);
+
         onTelemetry?.({
           fps: currentFps,
           isModelLoaded,
@@ -522,6 +566,7 @@ export function createShuralePipeline({
       } catch (err) {
         console.warn('recenter warning:', err);
       }
+      onDirectionHint?.(null);
       onStatusChange?.('searching', 'Сброшено — наведите на табличку А4');
     },
   };

@@ -1,4 +1,9 @@
-import { DEFAULT_SETTINGS, saveSettings } from './config.js';
+import {
+  DEFAULT_SETTINGS,
+  PRESET_FULL_FLOOR,
+  PRESET_DESK_MINI,
+  saveSettings,
+} from './config.js';
 
 export function createUIController({
   settings,
@@ -11,6 +16,9 @@ export function createUIController({
     statusPill: document.getElementById('status-pill'),
     statusText: document.getElementById('status-text'),
     scanHint: document.getElementById('scan-hint'),
+    directionHint: document.getElementById('direction-hint'),
+    btnPresetFull: document.getElementById('btn-preset-full'),
+    btnPresetDesk: document.getElementById('btn-preset-desk'),
     btnTelemetry: document.getElementById('btn-telemetry'),
     telemetryBox: document.getElementById('telemetry-box'),
     telemetryLines: document.getElementById('telemetry-lines'),
@@ -122,7 +130,7 @@ export function createUIController({
       const key = btn.dataset.step;
       const delta = parseFloat(btn.dataset.delta);
       const bounds = {
-        mountHeightM: [0.4, 2.3],
+        mountHeightM: [0.0, 2.3],
         offsetRightM: [-2.5, 2.5],
         offsetForwardM: [-1.0, 2.5],
       }[key];
@@ -158,6 +166,18 @@ export function createUIController({
 
   el.btnCloseSettings.addEventListener('click', () => setDrawerOpen(false));
 
+  el.btnPresetFull.addEventListener('click', () => {
+    Object.assign(settings, PRESET_FULL_FLOOR);
+    commitSettings();
+    showToast('Режим: полный рост 1,6 м на полу');
+  });
+
+  el.btnPresetDesk.addEventListener('click', () => {
+    Object.assign(settings, PRESET_DESK_MINI);
+    commitSettings();
+    showToast('Режим: мини-тест рядом с экраном (35 см)');
+  });
+
   el.btnResetDefaults.addEventListener('click', () => {
     Object.assign(settings, DEFAULT_SETTINGS);
     commitSettings();
@@ -187,6 +207,14 @@ export function createUIController({
       el.statusPill.className = `status-pill status-${mode}`;
       el.statusText.textContent = text;
       el.scanHint.classList.toggle('hidden', mode !== 'searching');
+    },
+    setDirectionHint(text) {
+      if (!text) {
+        el.directionHint.classList.add('hidden');
+      } else {
+        el.directionHint.textContent = text;
+        el.directionHint.classList.remove('hidden');
+      }
     },
     setTorchState({ isOn }) {
       el.btnTorch.setAttribute('aria-pressed', String(Boolean(isOn)));
