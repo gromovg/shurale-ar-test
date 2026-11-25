@@ -20,6 +20,9 @@
 <body>
   <canvas id="camerafeed"></canvas>
 
+  <!-- Subtle camera shutter flash overlay -->
+  <div id="shutter-flash" class="shutter-flash" aria-hidden="true"></div>
+
   <!-- Top HUD -->
   <header class="hud-top">
     <div id="status-pill" class="status-pill status-loading">
@@ -30,6 +33,13 @@
       INFO
     </button>
   </header>
+
+  <!-- Active video recording timer pill (visible only while recording) -->
+  <div id="rec-indicator" class="rec-indicator hidden" aria-live="polite">
+    <span class="rec-dot"></span>
+    <span id="rec-timer">00:00</span>
+    <span class="rec-limit">/ 00:30</span>
+  </div>
 
   <div id="telemetry-box" class="telemetry-box hidden">
     <div id="telemetry-lines">Инициализация...</div>
@@ -53,9 +63,9 @@
   <div id="start-overlay" class="modal-overlay">
     <div class="modal-card start-card">
       <div class="badge-chip">Кышкы Әкият • Иннополис</div>
-      <h2>Шурале AR — полевой тест</h2>
+      <h2>Шурале AR — фото и видео</h2>
       <p>
-        Наведите камеру на матовую табличку А4 — Шурале встанет ногами на землю рядом с ней и останется стоять при обходе на 360°.
+        Наведите камеру на матовую табличку А4 или на пол — Шурале встанет ногами на землю. Обходите его на 360°, снимайте фото и видео и сохраняйте в галерею.
       </p>
       <button id="btn-start-ar" class="btn-primary" type="button" disabled>
         Загрузка движка SLAM...
@@ -179,8 +189,92 @@
     </div>
   </div>
 
+  <!-- Photo / Video Preview & Save-to-Gallery Modal -->
+  <div
+    id="capture-preview-modal"
+    class="preview-modal hidden"
+    role="dialog"
+    aria-modal="true"
+    aria-label="Просмотр и сохранение"
+  >
+    <div class="preview-topbar">
+      <span id="preview-meta" class="preview-meta">Фото • JPG</span>
+      <button id="btn-preview-close" class="preview-close-btn" type="button" aria-label="Закрыть">
+        ✕
+      </button>
+    </div>
+
+    <div class="preview-stage">
+      <img id="preview-image" class="preview-media hidden" alt="Фото с Шурале" />
+      <video
+        id="preview-video"
+        class="preview-media hidden"
+        controls
+        playsinline
+        webkit-playsinline
+        autoplay
+        loop
+        muted
+      ></video>
+    </div>
+
+    <div class="preview-footer">
+      <p id="preview-hint" class="preview-hint"></p>
+      <div class="preview-actions">
+        <button id="btn-preview-primary" class="btn-preview-primary" type="button">
+          Сохранить в галерею
+        </button>
+        <div class="preview-secondary-row">
+          <button id="btn-preview-secondary" class="btn-preview-secondary" type="button">
+            Поделиться
+          </button>
+          <button id="btn-preview-retake" class="btn-preview-secondary" type="button">
+            Переснять
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <!-- Toast notification -->
   <div id="toast" class="toast hidden"></div>
+
+  <!-- Camera Capture Dock (Photo / Video mode + shutter button) -->
+  <div id="capture-dock" class="capture-dock hidden" aria-label="Съёмка фото и видео">
+    <div id="capture-mode-switch" class="mode-switch" role="tablist" aria-label="Режим съёмки">
+      <button
+        id="btn-mode-photo"
+        class="mode-pill is-active"
+        type="button"
+        role="tab"
+        aria-selected="true"
+      >
+        Фото
+      </button>
+      <button
+        id="btn-mode-video"
+        class="mode-pill"
+        type="button"
+        role="tab"
+        aria-selected="false"
+      >
+        Видео
+      </button>
+    </div>
+
+    <button
+      id="btn-shutter"
+      class="shutter-btn mode-photo"
+      type="button"
+      aria-label="Сделать фото"
+    >
+      <svg class="shutter-progress-ring" viewBox="0 0 76 76" aria-hidden="true">
+        <circle class="shutter-ring-track" cx="38" cy="38" r="35" />
+        <circle id="shutter-ring-bar" class="shutter-ring-bar" cx="38" cy="38" r="35" />
+      </svg>
+      <span class="shutter-inner"></span>
+    </button>
+  </div>
 
   <!-- Bottom Action Bar -->
   <nav class="hud-bottom" aria-label="Управление AR">

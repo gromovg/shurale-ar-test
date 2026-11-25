@@ -6,12 +6,17 @@ import {
   createTorchModule,
   createShuralePipeline,
 } from './ar-pipeline.js';
+import {
+  createCaptureController,
+  isVideoRecordingSupported,
+} from './capture.js';
 import { createUIController } from './ui.js';
 
 const settings = loadSettings();
 
 let arController = null;
 let torchModule = null;
+let captureController = null;
 let cachedXR8 = null;
 let cachedTargetData = null;
 let currentMode = 'slam'; // 'slam' | 'image-only'
@@ -22,10 +27,32 @@ const btnStartAr = document.getElementById('btn-start-ar');
 
 const ui = createUIController({
   settings,
+  videoSupported: isVideoRecordingSupported(),
   onSettingsChanged: () => arController?.applySettingsLive(),
   onReset: () => arController?.resetAnchor(),
   onPlaceHere: () => arController?.placeHere(),
   onToggleTorch: () => torchModule?.toggle(),
+  onTakePhoto: async () => {
+    if (!captureController) {
+      return { ok: false, reason: 'Камера ещё не запущена' };
+    }
+    try {
+      const result = await captureController.capturePhoto();
+      return { ok: true, media: result };
+    } catch (err) {
+      console.error('Capture photo failed:', err);
+      return { ok: false, reason: err?.message || 'Не удалось сделать фото' };
+    }
+  },
+  onStartVideo: () => {
+    if (!captureController) {
+      return { ok: false, reason: 'Камера ещё не запущена' };
+    }
+    return captureController.startVideoRecording();
+  },
+  onStopVideo: () => {
+    captureController?.stopVideoRecording();
+  },
   onRetry: () => window.location.reload(),
 });
 
@@ -70,7 +97,7 @@ async function fetchImageTarget() {
 
 /**
  * Trigger BOTH iOS Safari motion/orientation permission requests synchronously
- * inside the same click gesture tick (Promise.allSettled) so the user-gesture
+ * inside the same click gesture tick (Promise.all) so the user-gesture
  * token never expires between the first and second prompt.
  */
 async function requestIOSMotionPermissions() {
@@ -118,6 +145,7 @@ function formatErrorDetail(err) {
 function launchXR8({ disableWorldTracking }) {
   const XR8 = cachedXR8;
   currentMode = disableWorldTracking ? 'image-only' : 'slam';
+  ui.setCaptureAvailable(false);
 
   try {
     XR8.stop();
@@ -152,8 +180,19 @@ function launchXR8({ disableWorldTracking }) {
     },
   });
 
+  captureController = createCaptureController({
+    onCaptureActiveChange: (active) => arController?.setCaptureMode(active),
+    onRecordingStateChange: (state) => ui.setRecordingState(state),
+    onRecordingProgress: (progress) => ui.setRecordingProgress(progress),
+    onVideoReady: (media) => ui.showMediaPreview(media),
+    onError: (message) => ui.showToast(message, 3600),
+  });
+
   const cameraErrorModule = {
     name: 'camera-error-handler',
+    onStart: () => {
+      ui.setCaptureAvailable(true);
+    },
     onException: (err) => {
       console.error('XR8 exception:', err);
       const detail = formatErrorDetail(err);
@@ -167,6 +206,8 @@ function launchXR8({ disableWorldTracking }) {
         setTimeout(() => launchXR8({ disableWorldTracking: true }), 150);
         return;
       }
+
+      ui.setCaptureAvailable(false);
 
       if (detail.includes('No valid session manager')) {
         ui.setStatus('error', 'Откройте на смартфоне');
@@ -184,7 +225,10 @@ function launchXR8({ disableWorldTracking }) {
       );
     },
     onCameraStatusChange: ({ status, reason }) => {
-      if (status === 'failed') {
+      if (status === 'hasVideo' || status === 'hasStream') {
+        ui.setCaptureAvailable(true);
+      } else if (status === 'failed') {
+        ui.setCaptureAvailable(false);
         ui.setStatus('error', 'Нет доступа к камере');
         ui.showError(
           'Нужен доступ к камере',
@@ -202,6 +246,8 @@ function launchXR8({ disableWorldTracking }) {
     torchModule,
     cameraErrorModule,
     arController.pipelineModule,
+    // Registered LAST so its onRender captures the completed camera + 3D Shurale frame
+    captureController.pipelineModule,
   ]);
 
   const canvas = document.getElementById('camerafeed');

@@ -165,6 +165,7 @@ export function createShuralePipeline({
   let isManualPlaced = false;
   let isTargetVisible = false;
   let isSlamReady = Boolean(imageOnly);
+  let isCaptureMode = false;
   let lockCount = 0;
   let trackingStatus = imageOnly ? 'IMAGE_ONLY' : 'INITIALIZING';
 
@@ -266,7 +267,7 @@ export function createShuralePipeline({
   function updatePlaqueOutline(detail) {
     if (!plaqueOutline) return;
     const settings = getSettings();
-    plaqueOutline.visible = Boolean(isTargetVisible && settings.showPlaqueDebug);
+    plaqueOutline.visible = Boolean(!isCaptureMode && isTargetVisible && settings.showPlaqueDebug);
     if (!detail) return;
     plaqueOutline.position.set(detail.position.x, detail.position.y, detail.position.z);
     plaqueOutline.quaternion.set(detail.rotation.x, detail.rotation.y, detail.rotation.z, detail.rotation.w);
@@ -646,7 +647,7 @@ export function createShuralePipeline({
 
       // Show floor aiming ring when camera points at the floor and Shurale is not yet placed
       if (floorReticle && camera) {
-        if (!isAnchored) {
+        if (!isAnchored && !isCaptureMode) {
           const aim = raycastFloorPoint();
           if (aim && aim.exactRay) {
             floorReticle.position.copy(aim.point);
@@ -780,7 +781,7 @@ export function createShuralePipeline({
     applySettingsLive() {
       const settings = getSettings();
       if (plaqueOutline) {
-        plaqueOutline.visible = Boolean(isTargetVisible && settings.showPlaqueDebug);
+        plaqueOutline.visible = Boolean(!isCaptureMode && isTargetVisible && settings.showPlaqueDebug);
       }
       if (isManualPlaced && isAnchored && shuraleAnchor) {
         const { floorY, unitsPerMeter } = getCurrentFloorAndScale();
@@ -792,6 +793,18 @@ export function createShuralePipeline({
       const activePose = lockedPlaquePose || lastPlaquePose;
       if (isAnchored && activePose) {
         applyPoseToAnchor(activePose, { snap: true });
+      }
+    },
+    setCaptureMode(active) {
+      isCaptureMode = Boolean(active);
+      if (isCaptureMode) {
+        if (plaqueOutline) plaqueOutline.visible = false;
+        if (floorReticle) floorReticle.visible = false;
+      } else {
+        const settings = getSettings();
+        if (plaqueOutline) {
+          plaqueOutline.visible = Boolean(isTargetVisible && settings.showPlaqueDebug);
+        }
       }
     },
     resetAnchor() {

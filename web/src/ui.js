@@ -4,13 +4,30 @@ import {
   PRESET_DESK_MINI,
   saveSettings,
 } from './config.js';
+import {
+  MAX_VIDEO_DURATION_MS,
+  isIOSDevice,
+  isAndroidDevice,
+  canShareFile,
+  shareMediaFile,
+  downloadMediaFile,
+  formatFileSize,
+  formatDuration,
+} from './capture.js';
+
+const RING_RADIUS = 35;
+const RING_CIRCUMFERENCE = 2 * Math.PI * RING_RADIUS;
 
 export function createUIController({
   settings,
+  videoSupported = true,
   onSettingsChanged,
   onReset,
   onPlaceHere,
   onToggleTorch,
+  onTakePhoto,
+  onStartVideo,
+  onStopVideo,
   onRetry,
 }) {
   const el = {
@@ -19,6 +36,25 @@ export function createUIController({
     scanHint: document.getElementById('scan-hint'),
     scanLabel: document.getElementById('scan-label'),
     directionHint: document.getElementById('direction-hint'),
+    shutterFlash: document.getElementById('shutter-flash'),
+    recIndicator: document.getElementById('rec-indicator'),
+    recTimer: document.getElementById('rec-timer'),
+    captureDock: document.getElementById('capture-dock'),
+    btnModePhoto: document.getElementById('btn-mode-photo'),
+    btnModeVideo: document.getElementById('btn-mode-video'),
+    btnShutter: document.getElementById('btn-shutter'),
+    shutterRingBar: document.getElementById('shutter-ring-bar'),
+
+    previewModal: document.getElementById('capture-preview-modal'),
+    previewMeta: document.getElementById('preview-meta'),
+    previewImage: document.getElementById('preview-image'),
+    previewVideo: document.getElementById('preview-video'),
+    previewHint: document.getElementById('preview-hint'),
+    btnPreviewClose: document.getElementById('btn-preview-close'),
+    btnPreviewPrimary: document.getElementById('btn-preview-primary'),
+    btnPreviewSecondary: document.getElementById('btn-preview-secondary'),
+    btnPreviewRetake: document.getElementById('btn-preview-retake'),
+
     btnPresetFull: document.getElementById('btn-preset-full'),
     btnPresetDesk: document.getElementById('btn-preset-desk'),
     btnTelemetry: document.getElementById('btn-telemetry'),
@@ -57,6 +93,21 @@ export function createUIController({
   };
 
   let toastTimer = null;
+  let captureAvailable = false;
+  let captureMode = 'photo'; // 'photo' | 'video'
+  let isRecording = false;
+  let isFinalizing = false;
+  let isCapturingPhoto = false;
+
+  let activeMedia = null;
+  let activePreviewUrl = null;
+  let primaryAction = null;
+  let secondaryAction = null;
+
+  if (el.shutterRingBar) {
+    el.shutterRingBar.style.strokeDasharray = `${RING_CIRCUMFERENCE}`;
+    el.shutterRingBar.style.strokeDashoffset = `${RING_CIRCUMFERENCE}`;
+  }
 
   function showToast(msg, durationMs = 2600) {
     el.toast.textContent = msg;
@@ -65,6 +116,205 @@ export function createUIController({
     toastTimer = setTimeout(() => {
       el.toast.classList.add('hidden');
     }, durationMs);
+  }
+
+  function triggerShutterFlash() {
+    el.shutterFlash.classList.remove('flash-active');
+    // Force reflow so rapid consecutive photos re-trigger animation cleanly
+    void el.shutterFlash.offsetWidth;
+    el.shutterFlash.classList.add('flash-active');
+    if (navigator.vibrate) {
+      try {
+        navigator.vibrate(18);
+      } catch {
+        // ignore
+      }
+    }
+  }
+
+  function syncCaptureDockVisibility() {
+    const drawerOpen = !el.settingsDrawer.classList.contains('hidden');
+    const previewOpen = !el.previewModal.classList.contains('hidden');
+    const shouldShow = captureAvailable && !drawerOpen && !previewOpen;
+    el.captureDock.classList.toggle('hidden', !shouldShow);
+  }
+
+  function updateShutterAppearance() {
+    el.btnModePhoto.classList.toggle('is-active', captureMode === 'photo');
+    el.btnModePhoto.setAttribute('aria-selected', String(captureMode === 'photo'));
+    el.btnModeVideo.classList.toggle('is-active', captureMode === 'video');
+    el.btnModeVideo.setAttribute('aria-selected', String(captureMode === 'video'));
+
+    el.btnShutter.classList.toggle('mode-photo', captureMode === 'photo');
+    el.btnShutter.classList.toggle('mode-video', captureMode === 'video');
+    el.btnShutter.classList.toggle('is-recording', isRecording);
+    el.btnShutter.classList.toggle('is-busy', isFinalizing || isCapturingPhoto);
+    el.btnShutter.disabled = isFinalizing || isCapturingPhoto;
+
+    if (captureMode === 'photo') {
+      el.btnShutter.setAttribute('aria-label', 'Сделать фото');
+    } else if (isRecording) {
+      el.btnShutter.setAttribute('aria-label', 'Остановить запись видео');
+    } else {
+      el.btnShutter.setAttribute('aria-label', 'Начать запись видео');
+    }
+  }
+
+  function setCaptureMode(mode) {
+    if (isRecording || isFinalizing) return;
+    if (mode === 'video' && !videoSupported) {
+      showToast('Запись видео не поддерживается этим браузером. Используйте Safari (iOS) или Chrome.', 3600);
+      return;
+    }
+    captureMode = mode;
+    updateShutterAppearance();
+  }
+
+  function setRecordingProgress({ elapsedMs = 0, maxDurationMs = MAX_VIDEO_DURATION_MS }) {
+    el.recTimer.textContent = formatDuration(elapsedMs);
+    if (el.shutterRingBar) {
+      const ratio = Math.min(1, Math.max(0, elapsedMs / Math.max(1, maxDurationMs)));
+      const offset = RING_CIRCUMFERENCE * (1 - ratio);
+      el.shutterRingBar.style.strokeDashoffset = `${offset}`;
+    }
+  }
+
+  function setRecordingState({ isRecording: rec, isFinalizing: fin }) {
+    isRecording = Boolean(rec);
+    isFinalizing = Boolean(fin);
+    document.body.classList.toggle('is-recording', isRecording);
+    el.recIndicator.classList.toggle('hidden', !isRecording);
+
+    if (!isRecording) {
+      setRecordingProgress({ elapsedMs: 0, maxDurationMs: MAX_VIDEO_DURATION_MS });
+    }
+    if (isFinalizing) {
+      showToast('Сохранение видео...', 2000);
+    }
+    updateShutterAppearance();
+  }
+
+  function closeMediaPreview() {
+    el.previewModal.classList.add('hidden');
+    el.previewImage.classList.add('hidden');
+    el.previewImage.removeAttribute('src');
+
+    el.previewVideo.pause();
+    el.previewVideo.classList.add('hidden');
+    el.previewVideo.removeAttribute('src');
+    el.previewVideo.load();
+
+    if (activePreviewUrl) {
+      URL.revokeObjectURL(activePreviewUrl);
+      activePreviewUrl = null;
+    }
+    activeMedia = null;
+    primaryAction = null;
+    secondaryAction = null;
+    syncCaptureDockVisibility();
+  }
+
+  function showMediaPreview(media) {
+    if (!media || !media.blob) return;
+
+    clearTimeout(toastTimer);
+    el.toast.classList.add('hidden');
+    closeMediaPreview();
+    activeMedia = media;
+    activePreviewUrl = URL.createObjectURL(media.blob);
+
+    const isPhoto = media.kind === 'photo';
+    const sizeText = formatFileSize(media.blob.size);
+    if (isPhoto) {
+      el.previewMeta.textContent = `Фото • JPG • ${sizeText}`;
+      el.previewImage.src = activePreviewUrl;
+      el.previewImage.classList.remove('hidden');
+    } else {
+      const extUpper = (media.ext || 'mp4').toUpperCase();
+      const durText = media.durationMs ? ` • ${formatDuration(media.durationMs)}` : '';
+      el.previewMeta.textContent = `Видео ${extUpper}${durText} • ${sizeText}`;
+      el.previewVideo.src = activePreviewUrl;
+      el.previewVideo.muted = true;
+      el.previewVideo.playsInline = true;
+      el.previewVideo.classList.remove('hidden');
+      el.previewVideo.play().catch(() => {});
+    }
+
+    const ios = isIOSDevice();
+    const android = isAndroidDevice();
+    const shareable = canShareFile(media.file);
+
+    const runShare = async () => {
+      if (!activeMedia?.file) return;
+      const res = await shareMediaFile(activeMedia.file);
+      if (res.ok) {
+        showToast(
+          isPhoto
+            ? 'Готово! Ищите фото в галерее «Фото»'
+            : 'Готово! Ищите видео в галерее «Фото»',
+          3200,
+        );
+      } else if (!res.aborted) {
+        downloadMediaFile(activeMedia.blob, activeMedia.filename);
+        showToast('Файл скачан в «Загрузки»', 3000);
+      }
+    };
+
+    const runDownload = () => {
+      if (!activeMedia?.blob) return;
+      downloadMediaFile(activeMedia.blob, activeMedia.filename);
+      if (android) {
+        showToast('Сохранено! Файл появится в Галерее и папке «Загрузки»', 3400);
+      } else if (ios) {
+        showToast('Файл отправлен в «Загрузки» Safari (приложение «Файлы»)', 3400);
+      } else {
+        showToast('Файл сохранён в «Загрузки»', 2800);
+      }
+    };
+
+    if (ios && shareable) {
+      el.btnPreviewPrimary.textContent = isPhoto
+        ? 'Сохранить в «Фото» / Поделиться'
+        : 'Сохранить видео в «Фото»';
+      el.previewHint.textContent = isPhoto
+        ? 'В меню iPhone нажмите «Сохранить изображение» — снимок попадёт прямо в галерею «Фото» (или удерживайте фото пальцем).'
+        : 'В меню iPhone нажмите «Сохранить видео» — ролик попадёт прямо в галерею «Фото».';
+      primaryAction = runShare;
+
+      el.btnPreviewSecondary.textContent = 'В «Файлы»';
+      el.btnPreviewSecondary.classList.remove('hidden');
+      secondaryAction = runDownload;
+    } else if (ios && !shareable) {
+      el.btnPreviewPrimary.textContent = 'Скачать файл';
+      el.previewHint.textContent = isPhoto
+        ? 'Нажмите и удерживайте фото пальцем → «Сохранить в Фото», либо откройте эту ссылку в Safari.'
+        : 'Чтобы сохранить видео прямо в «Фото», откройте эту ссылку в Safari.';
+      primaryAction = runDownload;
+
+      el.btnPreviewSecondary.classList.add('hidden');
+      secondaryAction = null;
+    } else {
+      // Android Chrome & Desktop: direct download lands in Android Gallery / Downloads in 1 tap!
+      el.btnPreviewPrimary.textContent = android ? 'Сохранить в галерею' : 'Скачать файл';
+      el.previewHint.textContent = android
+        ? isPhoto
+          ? 'Снимок сохранится в телефон и сразу появится в Галерее / Google Фото.'
+          : 'Видео сохранится в телефон и сразу появится в Галерее / Google Фото.'
+        : 'Файл сохранится в папку «Загрузки» на компьютере.';
+      primaryAction = runDownload;
+
+      if (shareable) {
+        el.btnPreviewSecondary.textContent = 'Поделиться';
+        el.btnPreviewSecondary.classList.remove('hidden');
+        secondaryAction = runShare;
+      } else {
+        el.btnPreviewSecondary.classList.add('hidden');
+        secondaryAction = null;
+      }
+    }
+
+    el.previewModal.classList.remove('hidden');
+    syncCaptureDockVisibility();
   }
 
   function formatSignedMeters(v) {
@@ -98,6 +348,70 @@ export function createUIController({
     syncInputsFromSettings();
     onSettingsChanged?.();
   }
+
+  // Camera capture controls
+  el.btnModePhoto.addEventListener('click', () => setCaptureMode('photo'));
+  el.btnModeVideo.addEventListener('click', () => setCaptureMode('video'));
+
+  el.btnShutter.addEventListener('click', async () => {
+    if (isFinalizing || isCapturingPhoto) return;
+
+    if (captureMode === 'photo') {
+      isCapturingPhoto = true;
+      updateShutterAppearance();
+      triggerShutterFlash();
+
+      const res = await onTakePhoto?.();
+      isCapturingPhoto = false;
+      updateShutterAppearance();
+
+      if (res && res.ok && res.media) {
+        showMediaPreview(res.media);
+      } else if (res && res.reason) {
+        showToast(res.reason, 3200);
+      }
+      return;
+    }
+
+    // Video mode: tap to start, tap again to stop
+    if (!isRecording) {
+      if (navigator.vibrate) {
+        try {
+          navigator.vibrate(20);
+        } catch {
+          // ignore
+        }
+      }
+      const res = onStartVideo?.();
+      if (res && !res.ok && res.reason) {
+        showToast(res.reason, 3600);
+      }
+    } else {
+      if (navigator.vibrate) {
+        try {
+          navigator.vibrate([15, 40, 15]);
+        } catch {
+          // ignore
+        }
+      }
+      onStopVideo?.();
+    }
+  });
+
+  // Preview modal actions (must run directly inside click handler for iOS navigator.share!)
+  el.btnPreviewPrimary.addEventListener('click', () => {
+    primaryAction?.();
+  });
+  el.btnPreviewSecondary.addEventListener('click', () => {
+    secondaryAction?.();
+  });
+  el.btnPreviewClose.addEventListener('click', closeMediaPreview);
+  el.btnPreviewRetake.addEventListener('click', closeMediaPreview);
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && !el.previewModal.classList.contains('hidden')) {
+      closeMediaPreview();
+    }
+  });
 
   // Bind sliders
   el.inpMountHeight.addEventListener('input', () => {
@@ -180,6 +494,7 @@ export function createUIController({
   const setDrawerOpen = (open) => {
     el.settingsDrawer.classList.toggle('hidden', !open);
     el.btnSettings.setAttribute('aria-pressed', String(open));
+    syncCaptureDockVisibility();
   };
 
   el.btnSettings.addEventListener('click', () => {
@@ -224,8 +539,16 @@ export function createUIController({
   });
 
   syncInputsFromSettings();
+  updateShutterAppearance();
 
   return {
+    setCaptureAvailable(available) {
+      captureAvailable = Boolean(available);
+      syncCaptureDockVisibility();
+    },
+    setRecordingState,
+    setRecordingProgress,
+    showMediaPreview,
     setStatus(mode, text) {
       const cssMode = mode === 'calibrating' ? 'loading' : mode;
       el.statusPill.className = `status-pill status-${cssMode}`;
